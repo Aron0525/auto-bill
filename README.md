@@ -221,7 +221,8 @@ echo "sdk.dir=/path/to/Android/Sdk" > local.properties
 | [记账信息处理标准](docs/记账信息处理标准.md) | 字段定义与判定标准 |
 | [通知去重机制](docs/通知去重机制.md) | 五层去重设计 |
 | [OCR识别优化](docs/OCR识别优化.md) | 图片记账与版式模板 |
-| [远程更新](docs/远程更新.md) | 更新协议与自建服务器 |
+| [发布到 GitHub](docs/发布到GitHub.md) | 推送到 GitHub、发 Release、后续发版 |
+| [远程更新](docs/远程更新.md) | 更新协议、GitHub 与自建服务器两种方式 |
 | [现状诊断](docs/现状诊断.md) | 早期架构问题复盘 |
 | [策略重构](docs/策略重构.md) | 从压平文本到结构化 |
 
