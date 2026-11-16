@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="white">#FFFFFF</color>
+    <!-- 主色：蓝（参照设计稿） -->
+    <color name="primary">#2E7CF6</color>
+    <color name="primary_dark">#1B5FD9</color>
+    <color name="primary_light">#5B9BFF</color>
+    <color name="primary_container">#DCE9FF</color>
+    <color name="brand_orange">#FF6900</color>
+    <color name="brand_orange_dark">#B34A00</color>
+    <color name="brand_orange_container">#FFF1E5</color>
+    <color name="brand_teal">#00A383</color>
+    <!-- 页面底：浅蓝 -->
+    <color name="bg">#E9F1FF</color>
+    <color name="card">#FFFFFF</color>
+    <color name="ink">#17181A</color>
+    <color name="ink_sub">#8A93A6</color>
+    <color name="line">#EDF1F7</color>
+    <!-- 金额：支出黑、收入蓝（参照设计稿） -->
+    <color name="expense">#17181A</color>
+    <color name="income">#2E7CF6</color>
+    <color name="warn">#F5A524</color>
+    <color name="balance_negative">#FF6B3D</color>
+</resources>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  网络安全配置：放行明文 HTTP。
+  只为远程更新服务（用户可能把 update.json 和 APK 放在局域网 NAS 上，地址是 http）。
+  本应用没有其他联网行为：ML Kit 用的是自带模型，账本、截图全部留在本机。
+  换成纯 https 的更新服务器后，可以把 cleartextTrafficPermitted 改回 false。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

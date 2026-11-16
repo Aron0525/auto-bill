@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 只把「远程更新」目录暴露给系统安装器，账本数据库等其他文件一律不可被分享 -->
+<paths>
+    <external-files-path
+        name="update_apks"
+        path="update/" />
+</paths>

@@ -1,0 +1,41 @@
+# ---- 构建产物 ----
+build/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+.gradle/
+.gradle-cache/
+local.properties
+
+# ---- 自检编译产物 ----
+selftest/classes/
+*.jar
+
+# ---- IDE ----
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+
+# ---- 系统 ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 签名与密钥（绝不入库）----
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+signing.properties
+keystore.properties
+
+# ---- 本机临时 ----
+*.log
+*.db
+*.db-journal
+node_modules/

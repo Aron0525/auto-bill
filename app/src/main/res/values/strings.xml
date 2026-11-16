@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">自动记账</string>
+    <string name="accessibility_service_label">自动记账·交易监听</string>
+    <string name="accessibility_service_description">读取支付/到账通知与支付页面，实现自动记账。仅在本机解析金额、商户、时间，数据不上传。</string>
+</resources>

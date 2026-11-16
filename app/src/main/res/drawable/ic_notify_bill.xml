@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 状态栏小图标：必须是单色 silhouette（系统只取 alpha 通道），
+     这里画一个「¥ + 对勾」，表示「已记账」 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <!-- ¥ 符号 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M9.2,4.2 L11,7.6 L12.8,4.2 L14.4,4.2 L11.9,8.6 L11.9,9.6 L14.2,9.6 L14.2,10.9 L11.9,10.9 L11.9,12.1 L14.2,12.1 L14.2,13.4 L11.9,13.4 L11.9,16.4 L10.1,16.4 L10.1,13.4 L7.8,13.4 L7.8,12.1 L10.1,12.1 L10.1,10.9 L7.8,10.9 L7.8,9.6 L10.1,9.6 L10.1,8.6 Z" />
+    <!-- 右下角对勾（已记账） -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M13.4,17.2 L15.4,19.2 L20.0,14.4 L21.2,15.6 L15.4,21.6 L12.2,18.4 Z" />
+</vector>
