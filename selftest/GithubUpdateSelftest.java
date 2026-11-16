@@ -212,6 +212,129 @@ public class GithubUpdateSelftest {
                     UpdateChecker.hasNewer(10, next), "11 vs 10 应为 true");
         }
 
+        // ---------- I 组：真实数据暴露的 bug（回归防线） ----------
+        //
+        // 下面两条都不是我想出来的，是拿真实 GitHub 响应喂给解析器时才炸出来的。
+        // 合成数据太干净，测不出这两类问题 —— 所以必须固化成断言。
+
+        // I-1: v0.x 的 tag（termux 就是 v0.118.3）
+        //
+        //      versionCodeFromTag("v0.118.3") → 0
+        //      而 0 是**合法版本号**，不是解析失败。
+        //      如果判定写 <= 0，就会把它当失败 → 返回 null → 更新永远不可用。
+        //      「解析失败」的哨兵值必须是 -1，判定必须用 < 0。
+        eq("tag_v0_x", "v0.118.3 → 0（0 是合法版本号）",
+                UpdateChecker.versionCodeFromTag("v0.118.3"), 0);
+        eq("tag_v0", "v0 → 0", UpdateChecker.versionCodeFromTag("v0"), 0);
+
+        {
+            String v0Release = "{\"tag_name\":\"v0.5\",\"name\":\"v0.5\",\"body\":\"普通说明\","
+                    + "\"assets\":[{\"browser_download_url\":\"https://x.com/a.apk\"}]}";
+            UpdateChecker.UpdateInfo i = UpdateChecker.parseGithubRelease(v0Release);
+            ok("parse_v0_not_null", "v0.5 的 release 不能返回 null（曾被 <=0 误判）",
+                    i != null && i.versionCode == 0,
+                    i == null ? "返回 null（把 0 当成解析失败）" : "versionCode=" + i.versionCode);
+        }
+
+        // I-2: 大响应不能爆栈
+        //
+        //      原实现用正则 "(?:[^"\\]|\\.)*" 取字段值，
+        //      13KB 真实响应直接 StackOverflowError（嵌套量词指数回溯）。
+        //      这里造 200 个资产 + 大量引号体，验证线性扫描扛得住。
+        {
+            StringBuilder big = new StringBuilder(100_000);
+            big.append("{\"tag_name\":\"v3.0\",\"body\":\"");
+            for (int k = 0; k < 2000; k++) big.append("\"quoted\\\"text\\\" ").append(k).append(" ");
+            big.append("\",\"assets\":[");
+            for (int k = 0; k < 200; k++) {
+                if (k > 0) big.append(',');
+                big.append("{\"browser_download_url\":\"https://x.com/f").append(k).append(".txt\"}");
+            }
+            big.append(",{\"browser_download_url\":\"https://x.com/autobill.apk\"}]}");
+
+            long t0 = System.currentTimeMillis();
+            UpdateChecker.UpdateInfo i = UpdateChecker.parseGithubRelease(big.toString());
+            long ms = System.currentTimeMillis() - t0;
+
+            ok("parse_big_no_crash", "100KB 响应不爆栈（正则回溯问题）",
+                    i != null, "解析返回 null");
+            if (i != null) {
+                eq("parse_big_picks_apk", "大量非 apk 资产里挑出对的",
+                        i.apkUrl, "https://x.com/autobill.apk");
+            }
+            ok("parse_big_fast", "解析 100KB 在 500ms 内完成",
+                    ms < 500, "耗时 " + ms + "ms");
+        }
+
+        // I-3: body 里有大量引号/转义时 scalar 仍能取到 tag
+        {
+            StringBuilder b = new StringBuilder();
+            b.append("{\"body\":\"");
+            for (int k = 0; k < 500; k++) b.append("他说\\\"你好\\\" then \"x\" ");
+            b.append("\",\"tag_name\":\"v7\",\"assets\":[{\"browser_download_url\":\"https://x.com/a.apk\"}]}");
+            UpdateChecker.UpdateInfo i = UpdateChecker.parseGithubRelease(b.toString());
+            ok("scalar_heavy_quotes", "body 满是引号时仍取到 tag=v7",
+                    i != null && i.versionCode == 7,
+                    i == null ? "解析失败" : "versionCode=" + i.versionCode);
+        }
+
+        // ---------- J 组：断点续传（手机网络断流是常态） ----------
+        //
+        // 场景：47MB 的包下到一半断网了。用户重试时如果从 0 开始，
+        // 很容易再次断在同一个地方，最后谁都装不上。
+        //
+        // 用 file:// 模拟服务器：先下完整包，再人为截断 .part，看续传是否接得上。
+
+        try {
+            java.io.File dir = java.io.File.createTempFile("autobill_resume", "");
+            dir.delete();
+            dir.mkdirs();
+            java.io.File srcF = new java.io.File(dir, "src.bin");
+            // 造 1MB 测试数据
+            byte[] data = new byte[1024 * 1024];
+            for (int k = 0; k < data.length; k++) data[k] = (byte) (k % 251);
+            java.nio.file.Files.write(srcF.toPath(), data);
+
+            java.io.File dest = new java.io.File(dir, "out.bin");
+            java.io.File part = new java.io.File(dir, "out.bin.part");
+
+            // J-1: 正常下载
+            long n1 = UpdateChecker.download(srcF.toURI().toString(), dest, null, 5000);
+            ok("dl_full", "完整下载 1MB", n1 == data.length, "下了 " + n1);
+
+            // J-2: 模拟断流 —— 把 .part 截断到 300KB（download 只写 .part，不生成 dest）
+            ok("dl_part_exists", "download 只写 .part，不直接生成 dest",
+                    part.exists() && !dest.exists(),
+                    "part=" + part.exists() + " dest=" + dest.exists());
+
+            java.io.RandomAccessFile raf = new java.io.RandomAccessFile(part, "rw");
+            raf.setLength(300 * 1024);
+            raf.close();
+            ok("dl_truncate_setup", "构造半截 .part（300KB）",
+                    part.length() == 300 * 1024, "part=" + part.length());
+
+            // J-3: 续传 —— 应从 300KB 处接上，最终文件必须是完整的
+            long n2 = UpdateChecker.download(srcF.toURI().toString(), dest, null, 5000);
+            ok("dl_resumed_size", "续传后总字节数正确",
+                    n2 == data.length, "续传返回 " + n2 + "（应为 " + data.length + "）");
+
+            byte[] got = java.nio.file.Files.readAllBytes(part.toPath());
+            ok("dl_resumed_len", "续传后文件长度正确",
+                    got.length == data.length, "文件 " + got.length);
+            ok("dl_resumed_content", "续传后内容跟源文件逐字节一致",
+                    java.util.Arrays.equals(got, data), "内容不一致（续传拼接错位）");
+
+            // J-4: 续传结果也能通过哈希校验
+            String srcHash = UpdateChecker.sha256Hex(srcF);
+            ok("dl_resume_hash", "续传结果哈希与源一致（promote 会放行）",
+                    srcHash != null && srcHash.equals(UpdateChecker.sha256Hex(part)),
+                    "哈希不匹配");
+
+            dir.delete();
+        } catch (Exception e) {
+            ok("dl_resume_exception", "断点续传测试无异常", false, e.toString());
+        }
+
         System.out.println();
         System.out.println("==== GitHub 更新自检: " + pass + " 通过 / " + fail + " 失败 ====");
         if (fail > 0) System.exit(1);
