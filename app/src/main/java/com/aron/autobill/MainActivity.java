@@ -79,6 +79,11 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        // 每次回到前台都把保活服务拉一遍。
+        // 为什么在这里：MIUI 上 App 被清理后不会自己复活（实机验证过），
+        // 而系统通知使用权一旦授予就不会撤销 —— 用户只要打开过 App，
+        // 监听链路就应该恢复。这是用户能自己做到的、最省事的自愈动作。
+        KeepAliveService.start(this);
         if (contentHome != null) reload();
     }
 
@@ -163,6 +168,62 @@ public class MainActivity extends AppCompatActivity {
                 nm.notify(9999, b.build());
             } catch (Throwable t) {
                 android.util.Log.w("MainActivity", "测试通知失败: " + t);
+            }
+        }
+    }
+
+    /**
+     * 通知监控页的「连通性自检」：发一条**模拟支付**通知，走真实系统链路，
+     * 由我们自己的监听服务收回来 —— 验证的是端到端，不是打桩。
+     *
+     * 措辞刻意用「支付成功 / 收款方」这种真实交易的写法。
+     * 若写「测试通知」，会被 BillNotificationListener 的语义预筛
+     * 判为无支付语义而过滤，面板上显示「过滤」，
+     * 让人误以为是链路坏了 —— 那就把排查工具本身变成了新的困惑源。
+     */
+    public static class NotifSelftestReceiver extends BroadcastReceiver {
+        @Override public void onReceive(Context c, Intent i) {
+            post(c);
+        }
+
+        /**
+         * 真正发通知的逻辑。抽成静态方法是为了让监控面板能直接调用，
+         * 绕开广播 —— MIUI 会拦 App 内发广播，那样自检就成了摆设。
+         */
+        public static void post(Context c) {
+            try {
+                android.app.NotificationManager nm =
+                        (android.app.NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE);
+                if (nm == null) return;
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                        && nm.getNotificationChannel("autobill_bill") == null) {
+                    nm.createNotificationChannel(new android.app.NotificationChannel(
+                            "autobill_bill", "记账提醒",
+                            android.app.NotificationManager.IMPORTANCE_DEFAULT));
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                        && nm.getNotificationChannel("shell_cmd") == null) {
+                    nm.createNotificationChannel(new android.app.NotificationChannel(
+                            "shell_cmd", "自检",
+                            android.app.NotificationManager.IMPORTANCE_DEFAULT));
+                }
+
+                android.app.Notification.Builder b = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                        ? new android.app.Notification.Builder(c, "shell_cmd")
+                        : new android.app.Notification.Builder(c).setPriority(
+                                android.app.Notification.PRIORITY_DEFAULT);
+                b.setSmallIcon(R.drawable.ic_notify_bill)
+                        .setContentTitle("微信支付")
+                        .setContentText("微信支付 支付成功 12.34 元 收款方：连通性自检")
+                        .setStyle(new android.app.Notification.BigTextStyle()
+                                .bigText("微信支付 支付成功 12.34 元 收款方：连通性自检"))
+                        .setAutoCancel(true)
+                        .setWhen(System.currentTimeMillis());
+                nm.notify(9998, b.build());
+                android.util.Log.i("AutoBillSelftest", "已发出模拟支付通知");
+            } catch (Throwable t) {
+                android.util.Log.w("AutoBillSelftest", "自检通知失败: " + t);
             }
         }
     }

@@ -1,0 +1,237 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 通知监控面板：把「服务到底在不在干活」变成看得见的事实。
+     设计目标：用户付完钱发现没记账时，打开这一页就能判断卡在哪一步。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/bg">
+
+    <!-- 标题栏 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp">
+
+        <TextView
+            android:id="@+id/btn_back"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:padding="8dp"
+            android:text="←"
+            android:textColor="@color/ink"
+            android:textSize="20sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:text="通知监控"
+            android:textColor="@color/ink"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <View
+            android:layout_width="0dp"
+            android:layout_height="1dp"
+            android:layout_weight="1" />
+
+        <TextView
+            android:id="@+id/btn_refresh"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:padding="8dp"
+            android:text="刷新"
+            android:textColor="@color/primary"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <!-- 用 NestedScrollView 而不是 ScrollView：
+         MIUI 上普通 ScrollView 在 fillViewport + wrap_content 组合下
+         会把内容测量成「刚好填满视口」的高度，导致下半部分内容
+         （自检按钮、通知记录）既不可见也滚不出来。
+         实测：内容 LinearLayout 的 bounds 会变成 [0,248][1080,2400]，
+         与视口完全一致 —— 这就是滚不动的直接证据。
+         NestedScrollView 交给 ConstraintLayout 的测量链，不会出现这个问题。 -->
+    <androidx.core.widget.NestedScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true"
+        android:scrollbars="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingBottom="24dp">
+
+            <!-- 状态卡：一句话结论 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@color/card"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:id="@+id/tv_health"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="检测中…"
+                    android:textColor="@color/ink"
+                    android:textSize="15sp" />
+
+                <TextView
+                    android:id="@+id/tv_stats"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text=""
+                    android:textColor="@color/ink_sub"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <!-- 检查项逐条列出 -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:layout_marginBottom="8dp"
+                android:text="检查项"
+                android:textColor="@color/ink_sub"
+                android:textSize="13sp" />
+
+            <LinearLayout
+                android:id="@+id/ll_checks"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@color/card"
+                android:orientation="vertical"
+                android:padding="16dp" />
+
+            <!-- 修复入口 -->
+            <TextView
+                android:id="@+id/btn_fix"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="@color/primary"
+                android:gravity="center"
+                android:padding="14dp"
+                android:text="去授权"
+                android:textColor="@color/white"
+                android:textSize="15sp"
+                android:visibility="gone" />
+
+            <!-- 自启动修复入口：MIUI 禁了自启动时出现。
+                 实测这是最隐蔽的故障 —— 权限全开、服务却绑不上，
+                 因为 MIUI 的自启动管理器在开机时直接拒绝拉起本 App。 -->
+            <TextView
+                android:id="@+id/btn_auto_start"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="@color/warn"
+                android:gravity="center"
+                android:padding="14dp"
+                android:text="允许后台自启动"
+                android:textColor="@color/white"
+                android:textSize="15sp"
+                android:visibility="gone" />
+
+            <!-- 自检：发一条模拟通知 -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:text="连通性自检"
+                android:textColor="@color/ink_sub"
+                android:textSize="13sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:background="@color/card"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="点下面的按钮会发一条模拟的微信支付通知。如果它出现在记录列表里，说明监听链路是通的；如果没出现，问题在权限或服务。"
+                    android:textColor="@color/ink_sub"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:id="@+id/btn_selftest"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:background="@color/primary_container"
+                    android:gravity="center"
+                    android:padding="12dp"
+                    android:text="发一条模拟通知"
+                    android:textColor="@color/primary"
+                    android:textSize="14sp" />
+            </LinearLayout>
+
+            <!-- 最近收到的通知 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="最近通知"
+                    android:textColor="@color/ink_sub"
+                    android:textSize="13sp" />
+
+                <View
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
+
+                <TextView
+                    android:id="@+id/btn_clear_log"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:text="清空"
+                    android:textColor="@color/ink_sub"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/ll_entries"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:background="@color/card"
+                android:orientation="vertical"
+                android:padding="12dp" />
+
+            <TextView
+                android:id="@+id/tv_empty"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@color/card"
+                android:gravity="center"
+                android:padding="28dp"
+                android:text="还没有收到任何通知"
+                android:textColor="@color/ink_sub"
+                android:textSize="14sp"
+                android:visibility="gone" />
+        </LinearLayout>
+    </androidx.core.widget.NestedScrollView>
+</LinearLayout>

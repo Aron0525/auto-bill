@@ -82,6 +82,13 @@ public class SettingsActivity extends AppCompatActivity {
                 openNotificationAccess();
             }
         });
+
+        // ---- 通知监控：看到服务是否在岗、最近收件 ----
+        findViewById(R.id.card_monitor).setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                startActivity(new Intent(SettingsActivity.this, NotifMonitorActivity.class));
+            }
+        });
         TextView tvSub = findViewById(R.id.tv_update_sub);
         String savedUrl = com.aron.autobill.core.Prefs.updateUrl(this);
         tvSub.setText("当前版本 " + com.aron.autobill.ui.UpdateFlow.localName(this)
@@ -170,6 +177,54 @@ public class SettingsActivity extends AppCompatActivity {
             } catch (Throwable ignored) {}
         }
         Toast.makeText(this, "无法打开通知使用权设置，请手动到 设置→应用→特殊权限", Toast.LENGTH_LONG).show();
+    }
+
+    /**
+     * 打开 MIUI 的「自启动」管理页。
+     *
+     * ==================== 为什么这是必需的 ====================
+     *
+     * 真机实测（HyperOS / Android 14）：
+     *
+     *   · 通知使用权授予后，系统会在开机时尝试绑定监听服务：
+     *       ActivityManager: Unable to start service
+     *         Intent { cmp=com.aron.autobill/.BillNotificationListener } U=0: not found
+     *   · 但 MIUI 的自启动管理器会拒绝拉起我们的进程：
+     *       AutoStartManagerServiceStubImpl: MIUILOG- Reject service : ... uid : 10264
+     *       NotificationListeners: AutStart Unable to bind notification listener service
+     *
+     * 结果：手机上看着一切正常（权限是开的），实则一条通知都收不到。
+     * 这是最难查的一类故障 —— 表面无异常，功能却完全失效。
+     *
+     * ==================== action 的版本差异 ====================
+     *
+     * MIUI/HyperOS 各版本的 activity 名不同，逐级回退：
+     *   1. miui.intent.action.OP_AUTO_START（较新）
+     *   2. miui.intent.action.MIUI_PERM_AUTO_START（较老）
+     *   3. 应用管理页兜底
+     */
+    private void openAutoStartSettings() {
+        Intent[] candidates = {
+                new Intent("miui.intent.action.OP_AUTO_START").putExtra("package_name",
+                        getPackageName()).putExtra("package_label", "自动记账"),
+                new Intent("miui.intent.action.MIUI_PERM_AUTO_START").putExtra("package_name",
+                        getPackageName()),
+                new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        android.net.Uri.fromParts("package", getPackageName(), null)),
+        };
+        for (Intent i : candidates) {
+            try {
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(i);
+                Toast.makeText(this,
+                        "请把「自动记账」的自启动打开，否则重启手机后收不到通知",
+                        Toast.LENGTH_LONG).show();
+                return;
+            } catch (Throwable ignored) {}
+        }
+        Toast.makeText(this,
+                "请手动到「设置 → 应用设置 → 应用管理 → 自动记账 → 自启动」打开",
+                Toast.LENGTH_LONG).show();
     }
 
     private void confirmClear() {        int n = store.count();
