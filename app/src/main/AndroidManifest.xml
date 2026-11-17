@@ -9,15 +9,6 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- 远程更新：安装下载好的 APK（Android 8+ 按应用授权） -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-    <!-- 保活前台服务：让通知监听长期在岗（Android 9+ 必须声明） -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <!-- Android 14+ 要求按类型声明。用 specialUse：
-         它适用于「不属于其他现成类别」的常驻任务，正是通知监听这种场景。
-         dataSync 会有运行时长上限（Android 15 起 6 小时强制停止），
-         而记账需要全天候在岗，用 dataSync 反而会被系统定时掐掉。 -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <!-- 开机自启：重启后把保活服务拉回来，否则会静默失效 -->
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- 更新服务器可能是局域网 http（自建），本应用没有其他联网行为，放行明文 -->
     <application
@@ -116,47 +107,6 @@
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
-
-        <!-- 通知监控：把「到底有没有在收通知」变成看得见的事实 -->
-        <activity
-            android:name=".NotifMonitorActivity"
-            android:exported="false"
-            android:theme="@style/Theme.AutoBill" />
-
-        <!-- 保活前台服务：常驻一条无声通知，换取监听服务不被 MIUI 清理。
-             实机验证过：不加它时，force-stop 之后系统再也不会自动绑定
-             NotificationListenerService，此后的支付通知全部静默丢失。 -->
-        <service
-            android:name=".KeepAliveService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="持续监听微信/支付宝支付通知，以便及时记入本地账本" />
-        </service>
-
-
-        <!-- 开机自启：把保活服务拉回来。
-             MIUI 需额外允许「自启动」，否则这个广播收不到（见设置页引导）。 -->
-        <receiver
-            android:name=".BootReceiver"
-            android:exported="true"
-            android:enabled="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
-                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
-            </intent-filter>
-        </receiver>
-
-        <!-- 通知监控页的连通性自检：发一条模拟支付通知，验证端到端链路 -->
-        <receiver
-            android:name=".MainActivity$NotifSelftestReceiver"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="com.aron.autobill.NOTIF_SELFTEST" />
-            </intent-filter>
-        </receiver>
 
         <!-- 自检：触发一条记账横幅通知，验证通知链路。
              exported=true 仅为便于 adb 调试；它只发一条固定演示通知，不读不传任何数据。 -->

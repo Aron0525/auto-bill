@@ -117,68 +117,16 @@ public final class UpdateChecker {
         return info;
     }
 
-    /**
-     * 取 "key": value 中的 value 原文（字符串含引号与转义、数字裸值）。
-     *
-     * ==================== 为什么不用正则 ====================
-     *
-     * 原来的实现：
-     *   Pattern.compile("\"key\"\\s*:\\s*(\"(?:[^\"\\\\]|\\\\.)*\"|-?\\d+...)")
-     *
-     * 同样的嵌套量词回溯问题。在自写的 update.json（几百字节）上没事，
-     * 但 GitHub 的 release body 里常有大量引号、代码块、URL，
-     * 配合 13KB 的响应长度足以让正则引擎爆栈。
-     *
-     * 改成手写扫描后是确定性的 O(n)，再长的响应也不会出问题。
-     * 这类「合成数据测不出、真实数据一跑就炸」的 bug，只有拿真响应喂才暴露。
-     */
+    /** 取 "key": value 中的 value 原文（字符串含引号与转义、数字裸值） */
     private static String scalar(String json, String key) {
-        if (json == null || key == null) return null;
-        String needle = "\"" + key + "\"";
-        int from = 0;
-        while (true) {
-            int k = json.indexOf(needle, from);
-            if (k < 0) return null;
-            from = k + needle.length();
-
-            // 跳过空白找冒号
-            int p = from;
-            while (p < json.length() && Character.isWhitespace(json.charAt(p))) p++;
-            if (p >= json.length() || json.charAt(p) != ':') continue;
-            p++;
-            while (p < json.length() && Character.isWhitespace(json.charAt(p))) p++;
-            if (p >= json.length()) return null;
-
-            char c = json.charAt(p);
-
-            // ---- 字符串值 ----
-            if (c == '"') {
-                p++;
-                StringBuilder sb = new StringBuilder(64);
-                while (p < json.length()) {
-                    char ch = json.charAt(p);
-                    if (ch == '\\' && p + 1 < json.length()) {
-                        // 保留转义序列原文（含反斜杠），交给 unescape 处理
-                        sb.append(ch).append(json.charAt(p + 1));
-                        p += 2;
-                        continue;
-                    }
-                    if (ch == '"') break;
-                    sb.append(ch);
-                    p++;
-                }
-                return sb.toString();
-            }
-
-            // ---- 数字/布尔/null ----
-            int q = p;
-            while (q < json.length()) {
-                char ch = json.charAt(q);
-                if (ch == ',' || ch == '}' || ch == ']' || Character.isWhitespace(ch)) break;
-                q++;
-            }
-            return q > p ? json.substring(p, q) : null;
+        Pattern p = Pattern.compile("\"" + Pattern.quote(key) + "\"\\s*:\\s*(\"(?:[^\"\\\\]|\\\\.)*\"|-?\\d+(?:\\.\\d+)?)");
+        Matcher m = p.matcher(json);
+        if (!m.find()) return null;
+        String raw = m.group(1);
+        if (raw.startsWith("\"")) {
+            return raw.substring(1, raw.length() - 1);   // 去引号，保留转义符
         }
+        return raw;                                       // 数字
     }
 
     /** 解掉 JSON 字符串转义（引号、反斜杠、n/t/r，以及 4 位 hex 的 unicode 转义） */
@@ -249,14 +197,6 @@ public final class UpdateChecker {
      *     不给我们认识的格式时会回 415 或老版本 schema。
      */
     private static HttpURLConnection openHttp(String url, String accept, int timeoutMs) throws Exception {
-        return openHttp(url, accept, timeoutMs, -1);
-    }
-
-    /**
-     * @param rangeFrom &gt;= 0 时带 Range 头做断点续传（从该字节偏移开始）；
-     *                  -1 表示不续传，取完整内容。
-     */
-    private static HttpURLConnection openHttp(String url, String accept, int timeoutMs, long rangeFrom) throws Exception {
         java.net.URL current = new URL(url);
         for (int hop = 0; hop < MAX_REDIRECT; hop++) {
             java.net.URLConnection raw = current.openConnection();
@@ -264,7 +204,6 @@ public final class UpdateChecker {
             raw.setReadTimeout(timeoutMs);
             raw.setRequestProperty("User-Agent", UA);
             if (accept != null) raw.setRequestProperty("Accept", accept);
-            if (rangeFrom >= 0) raw.setRequestProperty("Range", "bytes=" + rangeFrom + "-");
             if (!(raw instanceof HttpURLConnection)) {
                 throw new IllegalStateException("非 HTTP 协议: " + current);
             }
@@ -281,11 +220,11 @@ public final class UpdateChecker {
                 current = new URL(current, loc);
                 continue;
             }
-            if (code != 200 && code != 206) {
+            if (code != 200) {
                 http.disconnect();
                 throw new IllegalStateException("HTTP " + code);
             }
-            return http;    // 200 = 完整内容；206 = 断点续传响应
+            return http;
         }
         throw new IllegalStateException("重定向超过 " + MAX_REDIRECT + " 次");
     }
@@ -375,15 +314,9 @@ public final class UpdateChecker {
         // 显式声明是作者主动写的意图，比从名字里猜可靠。
         //
         // 顺序：body 的 versionCode > tag 的第一个数字段
-        //
-        // 注意判定用 **< 0** 而不是 <= 0：
-        // versionCodeFromTag 用 -1 表示「解析失败」，而 **0 是一个合法版本号**。
-        // 真实案例：termux 的 tag 是 v0.118.3，第一个数字段是 0 —— 
-        // 如果写 <= 0 就会把它当解析失败，直接返回 null，更新永远不可用。
-        // （这个 bug 是在拿真实 GitHub 响应测试时才发现的，合成数据里没有 v0.x 的 tag。）
         int code = parseCodeFromNotes(bodyStr);
-        if (code < 0 && tag != null) code = versionCodeFromTag(unescape(tag));
-        if (code < 0) return null;
+        if (code <= 0 && tag != null) code = versionCodeFromTag(unescape(tag));
+        if (code <= 0) return null;
 
         UpdateInfo info = new UpdateInfo();
         info.versionCode = code;
@@ -461,59 +394,17 @@ public final class UpdateChecker {
     /**
      * 在 release 的 assets 里挑 APK。
      *
-     * ==================== 为什么不用正则 ====================
-     *
-     * 最初这里写的是：
-     *   Pattern.compile("\"browser_download_url\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")
-     *
-     * 在我手写的 1KB 假响应上工作正常。但换上**真实的 GitHub 响应（13.5KB）**
-     * 直接 StackOverflowError —— 嵌套量词 (?:[^"\\]|\\.)* 在长文本遇到
-     * 大量引号时会指数级回溯。
-     *
-     * 这类 bug 只在真实数据上暴露：合成测试的 JSON 太干净了。
-     * 现在改成手写扫描：线性时间，无回溯，13KB 也好 1MB 也好都是 O(n)。
-     *
-     * 挑选逻辑：
-     *   1. 找到所有 "browser_download_url" 后面的字符串值
-     *   2. 过滤出 .apk 结尾的
-     *   3. 优先含 "autobill" 的（仓库里可能挂了别的 apk）
+     * GitHub 响应里没有数组库可用（本类刻意不引 JSON 库），
+     * 所以按 "browser_download_url" 逐个扫，取第一个以 .apk 结尾的。
+     * 优先 favicon 明确叫 autobill 的，避免仓库里放了别的 apk 时拿错。
      */
     public static String pickApkAsset(String json) {
         if (json == null) return null;
-        final String KEY = "\"browser_download_url\"";
+        Matcher m = Pattern.compile(
+                "\"browser_download_url\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"").matcher(json);
         String first = null;
-        int from = 0;
-        while (true) {
-            int k = json.indexOf(KEY, from);
-            if (k < 0) break;
-            from = k + KEY.length();
-
-            // 找冒号
-            int p = from;
-            while (p < json.length() && Character.isWhitespace(json.charAt(p))) p++;
-            if (p >= json.length() || json.charAt(p) != ':') continue;
-            p++;
-
-            // 找起始引号
-            while (p < json.length() && Character.isWhitespace(json.charAt(p))) p++;
-            if (p >= json.length() || json.charAt(p) != '"') continue;
-            p++;
-
-            // 读到未转义的结束引号
-            StringBuilder sb = new StringBuilder(128);
-            while (p < json.length()) {
-                char c = json.charAt(p);
-                if (c == '\\' && p + 1 < json.length()) {
-                    sb.append(json.charAt(p + 1));   // \" \\ \/ 都取后一个字符本身
-                    p += 2;
-                    continue;
-                }
-                if (c == '"') break;
-                sb.append(c);
-                p++;
-            }
-
-            String url = sb.toString();
+        while (m.find()) {
+            String url = unescape(m.group(1));
             if (!url.toLowerCase().endsWith(".apk")) continue;
             if (first == null) first = url;
             if (url.toLowerCase().contains("autobill")) return url;
@@ -554,24 +445,15 @@ public final class UpdateChecker {
         File part = new File(dest.getPath() + ".part");
 
         // 自检用 file:// 当服务器 —— 不走 HTTP 协议栈，也不做重定向。
-        // 真实更新永远是 http(s)，这条分支只为让全套断言能在无网络环境跑完。
+        // 真实更新永远是 http(s)，这条分支只为让 315 条断言能在无网络环境跑完。
         if (url.startsWith("file:")) {
             URL src = new URL(url);
             File srcFile = new File(src.toURI());
             long total = srcFile.length();
-            // 支持断点续传：跳过已在 .part 里的部分
-            long already = part.exists() ? part.length() : 0;
-            if (already > total) { already = 0; part.delete(); }    // 源文件变小了，重来
             try (InputStream in = src.openStream();
-                 FileOutputStream out = new FileOutputStream(part, already > 0)) {
-                long skipped = 0;
-                while (skipped < already) {
-                    long s = in.skip(already - skipped);
-                    if (s <= 0) break;
-                    skipped += s;
-                }
+                 FileOutputStream out = new FileOutputStream(part)) {
                 byte[] buf = new byte[64 * 1024];
-                long read = skipped;
+                long read = 0;
                 int n;
                 while ((n = in.read(buf)) > 0) {
                     out.write(buf, 0, n);
@@ -585,39 +467,13 @@ public final class UpdateChecker {
             }
         }
 
-        HttpURLConnection conn = null;
+        HttpURLConnection conn = openHttp(url, "application/octet-stream, */*;q=0.8", timeoutMs);
         try {
-            // ==================== 断点续传 ====================
-            //
-            // 手机网络断流太常见了（切 WiFi、地铁进隧道、MIUI 后台限制）。
-            // 47MB 的包下到 90% 断了，如果没有续传就得从 0 开始 —— 用户很可能直接放弃。
-            //
-            // 做法：.part 已存在就带 Range 头从断点续。
-            // 服务器返回 206 Partial Content 才是真支持；返回 200 说明不支持 Range，
-            // 那就必须清空重下，否则会把整个文件追加到半截文件后面 —— 得到一个更大的坏包。
-            long already = part.exists() ? part.length() : 0;
-            conn = openHttp(url, "application/octet-stream, */*;q=0.8", timeoutMs,
-                    already > 0 ? already : -1);
-
-            int code = conn.getResponseCode();
-            boolean resumed = (code == HttpURLConnection.HTTP_PARTIAL);
-
-            if (already > 0 && !resumed) {
-                // 服务器不认 Range：丢弃已有部分，从头来
-                part.delete();
-                already = 0;
-                conn.disconnect();
-                conn = openHttp(url, "application/octet-stream, */*;q=0.8", timeoutMs);
-                code = conn.getResponseCode();
-            }
-
-            long contentLen = conn.getContentLengthLong();
-            long total = contentLen > 0 ? contentLen + already : -1;
-
+            long total = conn.getContentLengthLong();
             try (InputStream in = conn.getInputStream();
-                 FileOutputStream out = new FileOutputStream(part, already > 0)) {  // append 模式
+                 FileOutputStream out = new FileOutputStream(part)) {
                 byte[] buf = new byte[64 * 1024];
-                long read = already;
+                long read = 0;
                 long lastNotify = 0;
                 int n;
                 while ((n = in.read(buf)) > 0) {
@@ -633,12 +489,10 @@ public final class UpdateChecker {
                 return read;
             }
         } catch (Exception e) {
-            // 失败**保留** .part —— 下次可以从断点继续，而不是白下几十兆。
-            // 但如果是"服务器不认 Range"之外的原因导致文件明显不对，
-            // promote() 的哈希校验会拦住，不会装坏包。
+            part.delete();              // 失败不留半截文件
             throw e;
         } finally {
-            if (conn != null) conn.disconnect();
+            conn.disconnect();
         }
     }
 

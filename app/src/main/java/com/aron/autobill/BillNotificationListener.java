@@ -9,7 +9,6 @@ import android.service.notification.StatusBarNotification;
 import android.util.Log;
 
 import com.aron.autobill.core.BillStore;
-import com.aron.autobill.core.NotifLog;
 import com.aron.autobill.core.NotifPolicy;
 import com.aron.autobill.core.Prefs;
 import com.aron.autobill.model.Bill;
@@ -53,63 +52,11 @@ public class BillNotificationListener extends NotificationListenerService {
     private final Map<String, Long> seen = new LinkedHashMap<>();
 
     @Override
-    public void onCreate() {
-        super.onCreate();
-        setAppContext(this);
-    }
-
-    @Override
     public void onListenerConnected() {
         super.onListenerConnected();
         store = new BillStore(this);
         parser = new com.aron.autobill.core.BillParser();
-        // 系统把监听服务绑上了 —— 这是最可靠的“服务在岗”信号。
-        // 顺便把保活服务也拉起来（它可能因为 MIUI 清理掉过）。
-        NotifLog.markStart(System.currentTimeMillis());
-        KeepAliveService.start(this);
         Log.i(TAG, "通知监听已连接，开始监听交易通知");
-    }
-
-    /**
-     * 请求系统重新绑定本监听服务。
-     *
-     * ==================== 为什么不能只调 requestRebind ====================
-     *
-     * `NotificationListenerService.requestRebind()` 的语义是「重新绑定**已经绑过**的服务」。
-     * 实测（HyperOS / Android 14）：如果服务从未成功绑定过，或者被 MIUI 彻底踢掉，
-     * 调 requestRebind 什么都不会发生 —— 系统压根不理它。
-     *
-     * 真正有效的是「先撤销、再授权」，让系统重新评估监听器列表。
-     * 而且必须走 **binder 层**的 INotificationManagerService：
-     *   · NotificationManager.setNotificationListenerServiceEnabled 在 MIUI 上根本不存在
-     *     （反射抛 NoSuchMethodException，实测日志：
-     *       重绑失败: java.lang.NoSuchMethodException:
-     *         android.app.NotificationManager.setNotificationListenerServiceEnabled
-     *         [class android.content.ComponentName, boolean]）
-     *   · `cmd notification allow_listener` 走的正是 binder 层，所以它有效 ——
-     *     手动执行一次，日志立刻出现「通知监听已连接」
-     */
-    public static void requestRebind(android.content.ComponentName cn) {
-        if (cn == null) return;
-        com.aron.autobill.core.NotifBinder.rebind(
-                appContext != null ? appContext : null, BillNotificationListener.class);
-    }
-
-    /** Application 上下文，由 Service 创建时设置 */
-    private static android.content.Context appContext;
-
-    static void setAppContext(android.content.Context c) {
-        if (c != null) appContext = c.getApplicationContext();
-    }
-
-    @Override
-    public void onListenerDisconnected() {
-        super.onListenerDisconnected();
-        // 被系统解绑（可能是权限被撤销，或 MIUI 杀掉了）
-        Log.w(TAG, "通知监听已断开 —— 将尝试重新请求绑定");
-        try {
-            requestRebind(new android.content.ComponentName(this, BillNotificationListener.class));
-        } catch (Throwable ignored) {}
     }
 
     @Override
@@ -143,12 +90,7 @@ public class BillNotificationListener extends NotificationListenerService {
         String key = pkg + ":" + sbn.getId() + ":" + n.when;
         long now = System.currentTimeMillis();
         Long last = seen.get(key);
-        if (last != null && now - last < DEDUP_TTL_MS) {
-            // 重复投递也要记 —— 用户看到“重复 5 条”能明白是系统在反复推送，
-            // 不是我们漏记
-            NotifLog.record(now, pkg, null, "（重复投递）", NotifLog.DEDUP, "通知身份重复");
-            return;
-        }
+        if (last != null && now - last < DEDUP_TTL_MS) return;
         seen.put(key, now);
         prune(now);
 
@@ -157,10 +99,7 @@ public class BillNotificationListener extends NotificationListenerService {
         //      拼进正文会污染商户名。
         Fields f = extractFields(n);
         String text = f.flat;
-        if (text.isEmpty() || text.length() < 4) {
-            NotifLog.record(now, pkg, f.title, text, NotifLog.SKIP, "正文为空或过短");
-            return;
-        }
+        if (text.isEmpty() || text.length() < 4) return;
 
         // ---- 第二道闸：渠道/类型准入（在解析器之前）----
         // 这里是本轮精准度改造的核心：App 自己已经把通知分好类了
@@ -177,8 +116,6 @@ public class BillNotificationListener extends NotificationListenerService {
         if (d.isSkip()) {
             Log.i(TAG, "· 跳过[" + pkg + "/" + channelId + "] " + d.reason
                     + "  " + truncate(text));
-            NotifLog.record(now, pkg, f.title, text, NotifLog.FILTER,
-                    d.reason + "[" + channelId + "]");
             return;
         }
 
@@ -189,8 +126,6 @@ public class BillNotificationListener extends NotificationListenerService {
         if (d.verdict == NotifPolicy.PLACEHOLDER) {
             Log.i(TAG, "? 待补全[" + pkg + "/" + channelId + "] " + d.reason
                     + "  " + truncate(text));
-            NotifLog.record(now, pkg, f.title, text, NotifLog.ACCEPT,
-                    "占位符待补全[" + channelId + "]");
             BillProcessor.notifyPlaceholder(this, pkg, f.title, text);
             return;
         }
@@ -198,14 +133,10 @@ public class BillNotificationListener extends NotificationListenerService {
         // 快速预筛：没有支付语义的通知直接跳过，避免把聊天/广告送去解析
         if (!looksLikeTransaction(text) && d.verdict == NotifPolicy.PARSE) {
             Log.i(TAG, "· 非遗漏(无支付语义)[" + pkg + "] " + truncate(text));
-            NotifLog.record(now, pkg, f.title, text, NotifLog.FILTER,
-                    "无支付语义[" + channelId + "]");
             return;
         }
 
         Log.i(TAG, "通知[" + pkg + "/" + channelId + "] " + d.reason + " " + truncate(text));
-        NotifLog.record(now, pkg, f.title, text, NotifLog.ACCEPT,
-                d.reason + "[" + channelId + "]");
         dispatch(pkg, f.title, f.text, f.bigText, d);
     }
 
