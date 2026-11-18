@@ -90,6 +90,19 @@ public final class UpdateChecker {
         void onProgress(long read, long total);
     }
 
+    /** 取消信号（主线程置位，下载线程每写一块就看一次） */
+    public interface Canceller {
+        boolean cancelled();
+    }
+
+    /** 用户主动取消。跟「下载失败」分开，UI 不该为此弹错误框 */
+    public static class CancelledException extends Exception {
+        public CancelledException() { super("已取消"); }
+    }
+
+    /** 文本响应上限。update.json 几百字节，Release JSON 十几 KB，4MB 是给足余量 */
+    private static final int MAX_TEXT_BYTES = 4 * 1024 * 1024;
+
     // ==================== ① JSON 解析 ====================
 
     /**
@@ -381,23 +394,36 @@ public final class UpdateChecker {
         // 自检用 file:// 当服务器，不走 HTTP 协议栈
         if (url.startsWith("file:")) {
             try (InputStream in = new URL(url).openStream()) {
-                ByteArrayOutputStream bos = new ByteArrayOutputStream(4096);
-                byte[] buf = new byte[8192];
-                int n;
-                while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
-                return bos.toString(StandardCharsets.UTF_8.name());
+                return readText(in);
             }
         }
         HttpURLConnection conn = openHttp(url, "application/vnd.github+json, application/json;q=0.9, */*;q=0.8", timeoutMs);
         try (InputStream in = conn.getInputStream()) {
-            ByteArrayOutputStream bos = new ByteArrayOutputStream(4096);
-            byte[] buf = new byte[8192];
-            int n;
-            while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
-            return bos.toString(StandardCharsets.UTF_8.name());
+            return readText(in);
         } finally {
             conn.disconnect();
         }
+    }
+
+    /**
+     * 读文本，带大小上限。
+     *
+     * 没有上限时，一个被劫持/配错的地址回过来几百兆 HTML，先把 App 的堆吃光，
+     * 用户看到的是「闪退」而不是「地址填错了」。上限只用来拦明显不对的东西，
+     * 真实响应远小于它。
+     */
+    private static String readText(InputStream in) throws Exception {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream(4096);
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) > 0) {
+            bos.write(buf, 0, n);
+            if (bos.size() > MAX_TEXT_BYTES) {
+                throw new IllegalStateException("响应超过 " + (MAX_TEXT_BYTES / 1024 / 1024)
+                        + "MB，不像是 update.json 或 Release 描述，请检查地址");
+            }
+        }
+        return bos.toString(StandardCharsets.UTF_8.name());
     }
 
     // ==================== ③b GitHub Releases 适配 ====================
@@ -795,6 +821,15 @@ public final class UpdateChecker {
      * @return 实际写入的字节数
      */
     public static long download(String url, File dest, ProgressListener progress, int timeoutMs) throws Exception {
+        return download(url, dest, progress, timeoutMs, null);
+    }
+
+    /**
+     * @param cancel 每写完一块检查一次；返回 true 就停下并保留 .part（下次续传）。
+     *               传 null = 不可取消。
+     */
+    public static long download(String url, File dest, ProgressListener progress, int timeoutMs,
+                                Canceller cancel) throws Exception {
         File part = new File(dest.getPath() + ".part");
 
         // 自检用 file:// 当服务器 —— 不走 HTTP 协议栈，也不做重定向。
@@ -818,11 +853,14 @@ public final class UpdateChecker {
                 long read = skipped;
                 int n;
                 while ((n = in.read(buf)) > 0) {
+                    if (cancel != null && cancel.cancelled()) throw new CancelledException();
                     out.write(buf, 0, n);
                     read += n;
                 }
                 if (progress != null) progress.onProgress(read, total);
                 return read;
+            } catch (CancelledException ce) {
+                throw ce;       // 取消不算失败，.part 留着下次续
             } catch (Exception e) {
                 part.delete();
                 throw e;
@@ -840,8 +878,25 @@ public final class UpdateChecker {
             // 服务器返回 206 Partial Content 才是真支持；返回 200 说明不支持 Range，
             // 那就必须清空重下，否则会把整个文件追加到半截文件后面 —— 得到一个更大的坏包。
             long already = part.exists() ? part.length() : 0;
-            conn = openHttp(url, "application/octet-stream, */*;q=0.8", timeoutMs,
-                    already > 0 ? already : -1);
+            for (int attempt = 0; ; attempt++) {
+                try {
+                    conn = openHttp(url, "application/octet-stream, */*;q=0.8", timeoutMs,
+                            already > 0 ? already : -1);
+                    break;
+                } catch (Exception e) {
+                    // 416 Range Not Satisfiable = .part 已经到（或超过）远端文件末尾。
+                    // 典型来路：上次数据写完了、但哈希校验前进程被杀（promote 没执行）。
+                    // 以前这里直接把 "HTTP 416" 抛给用户，而 .part 一直留着 ——
+                    // 之后每次重试都是同一个 416，除了清应用数据没有出路。
+                    boolean rangeDead = String.valueOf(e.getMessage()).contains("416");
+                    if (rangeDead && already > 0 && attempt == 0) {
+                        part.delete();
+                        already = 0;
+                        continue;
+                    }
+                    throw e;
+                }
+            }
 
             int code = conn.getResponseCode();
             boolean resumed = (code == HttpURLConnection.HTTP_PARTIAL);
@@ -865,6 +920,7 @@ public final class UpdateChecker {
                 long lastNotify = 0;
                 int n;
                 while ((n = in.read(buf)) > 0) {
+                    if (cancel != null && cancel.cancelled()) throw new CancelledException();
                     out.write(buf, 0, n);
                     read += n;
                     long now = System.currentTimeMillis();
@@ -879,26 +935,53 @@ public final class UpdateChecker {
         } catch (Exception e) {
             // 失败**保留** .part —— 下次可以从断点继续，而不是白下几十兆。
             // 但如果是"服务器不认 Range"之外的原因导致文件明显不对，
-            // promote() 的哈希校验会拦住，不会装坏包。
+            // promote() 的哈希/魔数校验会拦住，不会装坏包。
             throw e;
         } finally {
             if (conn != null) conn.disconnect();
         }
     }
 
-    /** 下载完成：哈希通过 → part 改名为 dest；不通过 → 删除 part，返回 false */
+    /**
+     * 下载完成：哈希通过 + 确实是 APK → part 改名为 dest；
+     * 任何一项不通过 → 删除 part，返回 false。
+     *
+     * ==================== 为什么还要查魔数 ====================
+     *
+     * 哈希能证明「传输没坏、没被篡改」，但证明不了「下到的真的是安装包」。
+     * 服务器没给 sha256 时（自建 update.json 可以不填），一个 404 页面、
+     * 一个 GitHub 登录页、一个被运营商劫持的提示页都会被当成 APK 收下，
+     * 用户点安装才看到「解析包时出现错误」，完全对不上真正的原因。
+     *
+     * APK 是 zip，头四字节固定是 PK\x03\x04。这一眼就能看出来。
+     */
     public static boolean promote(File dest, String expectSha256) {
         File part = new File(dest.getPath() + ".part");
         if (!part.exists()) return false;
-        if (expectSha256 != null && !expectSha256.isEmpty()) {
+        if (expectSha256 != null && !expectSha256.trim().isEmpty()) {
             String actual = sha256Hex(part);
             if (actual == null || !actual.equalsIgnoreCase(expectSha256.trim())) {
                 part.delete();          // 哈希不对 = 包被篡改或下残了，坚决不用
                 return false;
             }
         }
+        if (!looksLikeApk(part)) {
+            part.delete();              // 不是 zip 就不可能是 APK
+            return false;
+        }
         if (dest.exists()) dest.delete();
         return part.renameTo(dest);
+    }
+
+    /** 头四字节是不是 zip 魔数（APK 就是 zip） */
+    public static boolean looksLikeApk(File f) {
+        if (f == null || !f.exists() || f.length() < 4) return false;
+        try (FileInputStream in = new FileInputStream(f)) {
+            int a = in.read(), b = in.read(), c = in.read(), d = in.read();
+            return a == 'P' && b == 'K' && c == 3 && d == 4;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     // ==================== ⑤ SHA-256 ====================

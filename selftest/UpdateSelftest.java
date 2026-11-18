@@ -32,6 +32,7 @@ public class UpdateSelftest {
         testSha256();
         testFetchDownload();
         testTamper();
+        testCancelAndLimit();
         System.out.println();
         System.out.println("==== 远程更新自检: " + pass + " 通过 / " + fail + " 失败 ====");
         if (fail > 0) System.exit(1);
@@ -174,6 +175,7 @@ public class UpdateSelftest {
         File apkSrc = new File(dir, "app.apk");
         byte[] payload = new byte[300_000];          // 300KB，跨多个 64KB buffer
         for (int i = 0; i < payload.length; i++) payload[i] = (byte) (i * 31);
+        payload[0] = 'P'; payload[1] = 'K'; payload[2] = 3; payload[3] = 4;   // APK = zip
         try (FileOutputStream out = new FileOutputStream(apkSrc)) {
             out.write(payload);
         }
@@ -202,14 +204,14 @@ public class UpdateSelftest {
         eq("下载内容与源头一致", UpdateChecker.sha256Hex(apkSrc), UpdateChecker.sha256Hex(dest));
     }
 
-    // ---------- 防篡改：哈希不匹配必须拒绝 ----------
+    // ---------- 防篡改：哈希不匹配 / 下到的不是安装包，都必须拒绝 ----------
     static void testTamper() throws Exception {
         System.out.println("\n【防篡改】");
         File dir = tempDir();
         File dest = new File(dir, "v.apk");
         File part = new File(dest.getPath() + ".part");
         try (FileOutputStream out = new FileOutputStream(part)) {
-            out.write("evil".getBytes(StandardCharsets.UTF_8));
+            out.write(apkBytes("evil"));            // 带头 PK\x03\x04 的假包
         }
         String rightHash = UpdateChecker.sha256Hex(part);
 
@@ -221,12 +223,33 @@ public class UpdateSelftest {
         File dest2 = new File(dir, "v2.apk");
         File part2 = new File(dest2.getPath() + ".part");
         try (FileOutputStream out = new FileOutputStream(part2)) {
-            out.write("evil".getBytes(StandardCharsets.UTF_8));
+            out.write(apkBytes("evil"));
         }
         ok("哈希错误 promote 拒绝",
                 !UpdateChecker.promote(dest2, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"), "通过了");
         ok("拒绝后 part 已删除", !part2.exists(), "还在");
         ok("拒绝后正式文件未生成", !dest2.exists(), "生成了");
+
+        // 不是 zip（服务器回了 HTML 错误页）→ 没有哈希也必须拒绝
+        File dest3 = new File(dir, "v3.apk");
+        File part3 = new File(dest3.getPath() + ".part");
+        try (FileOutputStream out = new FileOutputStream(part3)) {
+            out.write("<!DOCTYPE html><html><body>404 Not Found</body></html>"
+                    .getBytes(StandardCharsets.UTF_8));
+        }
+        ok("HTML 错误页当 APK → 拒绝", !UpdateChecker.promote(dest3, ""), "被当成安装包收下了");
+        ok("HTML 页被删除", !part3.exists(), "还在");
+
+        // 太短的文件也不是包
+        File dest4 = new File(dir, "v4.apk");
+        try (FileOutputStream out = new FileOutputStream(new File(dest4.getPath() + ".part"))) {
+            out.write(new byte[]{'P', 'K'});
+        }
+        ok("只有两个字节 → 不是 APK", !UpdateChecker.promote(dest4, ""), "通过了");
+
+        ok("looksLikeApk 认真包（PK\\x03\\x04）",
+                UpdateChecker.looksLikeApk(new File(dir, "v.apk")), "认不出");
+        ok("looksLikeApk 拒绝文本", !UpdateChecker.looksLikeApk(new File(dir, "v3.apk")), "误判成 APK");
 
         // 下载失败不留 part（download 直接异常时 part 删除）
         try {
@@ -236,6 +259,54 @@ public class UpdateSelftest {
             ok("下载不存在的文件抛异常", true, "");
         }
         ok("失败后没有残留 part", !new File(dest2.getPath() + ".part").exists(), "有残留");
+    }
+
+    // ---------- 取消与响应上限 ----------
+    static void testCancelAndLimit() throws Exception {
+        System.out.println("\n【取消与响应上限】");
+        File dir = tempDir();
+
+        File src = new File(dir, "big.bin");
+        byte[] data = new byte[200_000];
+        for (int i = 0; i < data.length; i++) data[i] = (byte) i;
+        data[0] = 'P'; data[1] = 'K'; data[2] = 3; data[3] = 4;
+        try (FileOutputStream out = new FileOutputStream(src)) {
+            out.write(data);
+        }
+
+        File dest = new File(dir, "c.apk");
+        boolean cancelled = false;
+        try {
+            UpdateChecker.download(src.toURI().toString(), dest, null, 5000, () -> true);
+        } catch (UpdateChecker.CancelledException ce) {
+            cancelled = true;
+        }
+        ok("取消信号生效（不再空跑到底）", cancelled, "没抛 CancelledException");
+        ok("取消后不生成正式文件", !dest.exists(), "生成了一半的包");
+        ok("取消保留 .part（下次续传）", new File(dest.getPath() + ".part").exists(), "part 被删了");
+
+        // 响应体上限：拿一个 5MB 的文件当 JSON 拉
+        File huge = new File(dir, "huge.json");
+        byte[] five = new byte[5 * 1024 * 1024];
+        try (FileOutputStream out = new FileOutputStream(huge)) {
+            out.write(five);
+        }
+        boolean rejected = false;
+        try {
+            UpdateChecker.fetch(huge.toURI().toString(), 5000);
+        } catch (Exception e) {
+            rejected = String.valueOf(e.getMessage()).contains("MB");
+        }
+        ok("超大响应被拒（不会吃光堆）", rejected, "照单全收");
+    }
+
+    /** 造一个以 zip 魔数开头的假安装包 */
+    static byte[] apkBytes(String tail) {
+        byte[] t = tail.getBytes(StandardCharsets.UTF_8);
+        byte[] out = new byte[t.length + 4];
+        out[0] = 'P'; out[1] = 'K'; out[2] = 3; out[3] = 4;
+        System.arraycopy(t, 0, out, 4, t.length);
+        return out;
     }
 
     static File tempDir() {

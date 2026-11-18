@@ -166,10 +166,43 @@ public final class UpdateFlow {
                 Log.w(TAG, "检查更新失败", e);
                 activity.runOnUiThread(() -> {
                     if (activity.isFinishing() || activity.isDestroyed()) return;
-                    fail(activity, "检查更新失败：" + e.getMessage());
+                    fail(activity, "检查更新失败：" + explain(e));
                 });
             }
         }, "update-check").start();
+    }
+
+    /**
+     * 把异常翻成人话。
+     *
+     * 原来直接把 e.getMessage() 甩给用户，最常见的是三种：
+     *   "HTTP 404"          —— APK 被删了或改了名
+     *   "HTTP 403"          —— GitHub 限流 / 私有仓库
+     *   "Connection refused" —— 自建服务器没开
+     * 这些词对用户没有任何指向性，等于说了句「失败了」。
+     */
+    private static String explain(Throwable e) {
+        String m = e.getMessage() == null ? "" : e.getMessage();
+        if (e instanceof java.net.UnknownHostException || m.contains("Unable to resolve host")) {
+            return "域名解析失败，检查网络，或更新地址是否写错";
+        }
+        if (e instanceof java.net.SocketTimeoutException || m.toLowerCase().contains("timed out")) {
+            return "连接超时，换个网络或稍后再试";
+        }
+        if (e instanceof java.net.MalformedURLException) {
+            return "更新地址格式不对：" + m;
+        }
+        if (m.contains("403")) {
+            return "服务器拒绝访问（403）。GitHub 走 API 时未登录限流约 60 次/小时，"
+                    + "建议改用 owner/repo 或 release 直链（走静态通道，不限流）";
+        }
+        if (m.contains("404")) {
+            return "地址不存在（404），安装包可能已被删除或改了文件名";
+        }
+        if (m.contains("416")) {
+            return "服务器不接受断点续传（416），请重试一次";
+        }
+        return m.isEmpty() ? e.getClass().getSimpleName() : m;
     }
 
     private static void fail(Activity a, String msg) {
@@ -231,7 +264,9 @@ public final class UpdateFlow {
                                  final UpdateChecker.UpdateInfo info) {
         final String apkUrl = UpdateChecker.resolveApkUrl(jsonUrl, info.apkUrl);
         if (apkUrl.isEmpty()) {
-            fail(activity, "更新描述里没有 apkUrl");
+            fail(activity, "更新信息里的下载地址无效：\n" + info.apkUrl
+                    + "\n\n若是自建的 update.json，apkUrl 请写绝对地址（https://…apk）"
+                    + " 或相对 update.json 的文件名。");
             return;
         }
         final File dir = new File(activity.getExternalFilesDir("update") != null
@@ -277,6 +312,7 @@ public final class UpdateFlow {
             try {
                 UpdateChecker.download(apkUrl, dest, (read, total) ->
                         activity.runOnUiThread(() -> {
+                            if (activity.isFinishing() || activity.isDestroyed()) return;
                             if (total > 0) {
                                 int pct = (int) (read * 100 / total);
                                 bar.setProgress(pct);
@@ -284,9 +320,25 @@ public final class UpdateFlow {
                             } else {
                                 tvMsg.setText((read / 1024) + " KB…");
                             }
-                        }), TIMEOUT_MS);
+                        }), TIMEOUT_MS, () -> cancelled[0]);
 
+                // 取消是在写每一块之前检查的，走到这里说明整包已经落盘
                 if (cancelled[0]) return;
+
+                final File part = new File(dest.getPath() + ".part");
+                if (!UpdateChecker.looksLikeApk(part)) {
+                    // 服务器回了个网页（404 页、登录页、劫持页）也会被当成功下载。
+                    // 不拦就会走到系统安装器，报的是「解析包时出现错误」，跟真实原因无关。
+                    if (part.exists()) part.delete();
+                    activity.runOnUiThread(() -> {
+                        if (activity.isFinishing() || activity.isDestroyed()) return;
+                        dialog.dismiss();
+                        fail(activity, "下载到的不是安装包（服务器可能返回了错误页面）。"
+                                + "\n请确认更新地址指向 APK 文件或 GitHub Release。");
+                    });
+                    return;
+                }
+
                 // 哈希校验（.part → .apk）
                 if (!UpdateChecker.promote(dest, info.sha256)) {
                     activity.runOnUiThread(() -> {
@@ -304,12 +356,19 @@ public final class UpdateFlow {
                     Log.i(TAG, "下载完成并校验通过: " + apk + " sha=" + UpdateChecker.sha256Hex(apk));
                     install(activity, apk);
                 });
+            } catch (UpdateChecker.CancelledException ce) {
+                // 用户自己按的取消，不是错误。.part 留在原地下次续传。
+                activity.runOnUiThread(() -> {
+                    if (activity.isFinishing() || activity.isDestroyed()) return;
+                    dialog.dismiss();
+                    Toast.makeText(activity, "已暂停下载，下次检查更新会接着下", Toast.LENGTH_SHORT).show();
+                });
             } catch (Exception e) {
                 Log.w(TAG, "下载失败", e);
                 activity.runOnUiThread(() -> {
                     if (activity.isFinishing() || activity.isDestroyed()) return;
                     dialog.dismiss();
-                    fail(activity, "下载失败：" + e.getMessage());
+                    fail(activity, "下载失败：" + explain(e));
                 });
             }
         }, "update-download").start();
@@ -329,11 +388,13 @@ public final class UpdateFlow {
     // ==================== 唤起系统安装器 ====================
 
     public static void install(Activity activity, File apk) {
+        // 这里只确认文件还在。校验（哈希/魔数）在 promote 那一步已经做过，
+        // 原来的 verify(apk, null) 期望值为空永远返回 true，等于没检查。
+        if (apk == null || !apk.exists() || apk.length() == 0) {
+            fail(activity, "安装包不存在");
+            return;
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            if (!apk.exists() || !UpdateChecker.verify(apk, null)) {
-                fail(activity, "安装包不存在");
-                return;
-            }
             Uri uri = FileProvider.getUriForFile(activity,
                     activity.getPackageName() + ".fileprovider", apk);
             Intent i = new Intent(Intent.ACTION_VIEW);

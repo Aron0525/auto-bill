@@ -50,6 +50,7 @@ com.aron.autobill.selftest.OcrSelftest
 com.aron.autobill.selftest.TemplateSelftest
 com.aron.autobill.selftest.RealImageSelftest
 com.aron.autobill.selftest.UpdateSelftest
+com.aron.autobill.selftest.UpdateHttpSelftest
 com.aron.autobill.selftest.NotifPrecisionSelftest
 com.aron.autobill.selftest.ChannelPolicySelftest
 com.aron.autobill.selftest.NotifPipelineSelftest
