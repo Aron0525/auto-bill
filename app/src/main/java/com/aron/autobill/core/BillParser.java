@@ -1309,7 +1309,7 @@ public class BillParser {
     private static String valueAfterLabel(String line, String[] labels) {
         if (line == null || line.isEmpty()) return "";
         for (String label : labels) {
-            int idx = line.indexOf(label);
+            int idx = labelIndex(line, label);
             if (idx < 0) continue;
             String v = line.substring(idx + label.length());
             // 剥掉分隔符
@@ -1352,6 +1352,36 @@ public class BillParser {
     }
 
     /**
+     * 标签的「有效出现位置」。
+     *
+     * 只认后面紧跟分隔符（空格/冒号/等号/顿号…）或行尾的那次出现。
+     * 真机翻车记录：「支付宝 你已成功付款 12.00元 付款方式：余额宝」——
+     * 「付款方」是「付款方式」的前缀，旧逻辑直接命中，
+     * 剩下的「式：余额宝」被清洗成商户「式:」，置信度 100 直接入账。
+     *
+     * @return -1 = 这一行里没有真正的标签
+     */
+    private static int labelIndex(String line, String label) {
+        int from = 0;
+        while (from <= line.length()) {
+            int idx = line.indexOf(label, from);
+            if (idx < 0) return -1;
+            int after = idx + label.length();
+            if (after >= line.length() || isLabelSeparator(line.charAt(after))) return idx;
+            from = idx + 1;
+        }
+        return -1;
+    }
+
+    /** 标签与值之间的分隔符。中文文案里最常见的是空格与全角冒号。 */
+    private static boolean isLabelSeparator(char c) {
+        return c == ' ' || c == '\t' || c == '\n' || c == ':'
+                || c == '：' || c == '=' || c == '＝' || c == '-'
+                || c == '—' || c == '、' || c == ',' || c == '，'
+                || c == '.' || c == '。' || c == '【' || c == '】';
+    }
+
+    /**
      * 在下一个标签词处截断。
      * 例：「京东商城 退款时间 2026-11-11」→「京东商城」
      */
@@ -1363,7 +1393,7 @@ public class BillParser {
             if (i > 0 && i < cut) cut = i;
         }
         // 也按常见字段名截断（这些不一定在 MERCHANT_LABELS 里）
-        String[] others = {"退款时间", "支付方式", "交易时间", "到账时间", "订单时间",
+        String[] others = {"退款时间", "支付方式", "付款方式", "交易时间", "到账时间", "订单时间",
                 "退款金额", "交易金额", "订单编号", "交易单号", "余额", "摘要"};
         for (String l : others) {
             int i = v.indexOf(l);
