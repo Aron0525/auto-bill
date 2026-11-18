@@ -15,6 +15,7 @@ import android.view.accessibility.AccessibilityNodeInfo;
 import com.aron.autobill.core.BillParser;
 import com.aron.autobill.core.BillStore;
 import com.aron.autobill.core.Category;
+import com.aron.autobill.core.NotifPolicy;
 import com.aron.autobill.core.Prefs;
 import com.aron.autobill.core.ScreenPolicy;
 import com.aron.autobill.model.Bill;
@@ -157,6 +158,27 @@ public class AutoBillAccessibilityService extends AccessibilityService {
 
     /** 通知正文是拿到支付通知的最可靠来源 */
     private void handleNotification(AccessibilityEvent event, String pkg) {
+        // MIUI 上 getParcelableData() 经常为 null，先尽量拿到完整的 Notification。
+        // 拿到与拿不到，走的判定深度不一样（见 deliverNotification）。
+        Notification n = null;
+        try {
+            if (event.getParcelableData() instanceof Notification) {
+                n = (Notification) event.getParcelableData();
+            }
+        } catch (Throwable ignored) {}
+
+        String title = "", text = "", big = "";
+        try {
+            if (n != null && n.extras != null) {
+                CharSequence t = n.extras.getCharSequence(Notification.EXTRA_TITLE);
+                if (t != null) title = t.toString().trim();
+                CharSequence b = n.extras.getCharSequence(Notification.EXTRA_BIG_TEXT);
+                if (b != null) big = b.toString().trim();
+                CharSequence tx = n.extras.getCharSequence(Notification.EXTRA_TEXT);
+                if (tx != null) text = tx.toString().trim();
+            }
+        } catch (Throwable ignored) {}
+
         String raw = extractNotificationText(event);
         if (raw.isEmpty()) {
             // 兜底：getText()
@@ -175,8 +197,7 @@ public class AutoBillAccessibilityService extends AccessibilityService {
         // 用「包名:ID」做键，短时间内重复的直接跳过，连解析都省掉。
         String noteKey = null;
         try {
-            if (event.getParcelableData() instanceof Notification) {
-                Notification n = (Notification) event.getParcelableData();
+            if (n != null) {
                 CharSequence t = (n.extras == null) ? null
                         : n.extras.getCharSequence(Notification.EXTRA_TITLE);
                 noteKey = pkg + ":" + n.when + ":" + (t == null ? "" : t);
@@ -186,6 +207,8 @@ public class AutoBillAccessibilityService extends AccessibilityService {
             Long last = noticeKeys.get(noteKey);
             if (last != null && now - last < FINGERPRINT_TTL_MS) {
                 Log.i(TAG, "· 跳过重复通知(身份)[" + pkg + "] " + truncate(raw));
+                com.aron.autobill.core.NotifLog.record(now, pkg, title, raw,
+                        com.aron.autobill.core.NotifLog.DEDUP, "通知身份重复");
                 return;
             }
             noticeKeys.put(noteKey, now);
@@ -197,13 +220,82 @@ public class AutoBillAccessibilityService extends AccessibilityService {
         Long lastFp = bodyFingerprints.get(fp);
         if (lastFp != null && now - lastFp < FINGERPRINT_TTL_MS) {
             Log.i(TAG, "· 跳过重复通知(指纹)[" + pkg + "] " + truncate(raw));
+            com.aron.autobill.core.NotifLog.record(now, pkg, title, raw,
+                    com.aron.autobill.core.NotifLog.DEDUP, "正文指纹重复");
             return;
         }
         bodyFingerprints.put(fp, now);
         pruneMap(bodyFingerprints, now);
 
         Log.i(TAG, "通知[" + pkg + "]: " + raw);
-        tryParseAndStore(pkg, raw, "notification");
+        deliverNotification(pkg, n, title, text, big, raw);
+    }
+
+    /**
+     * 通知通道的准入与投递。
+     *
+     * ==================== 为什么必须补这一层 ====================
+     *
+     * 这个无障碍分支原先绕过了 NotifPolicy，直接把压平文本丢进解析器。
+     * 后果是通知监听那边的渠道分流全部作废：
+     *   支付宝「双11 消费券已到账 20 元 快去使用」（渠道 100064，策略判丢弃）
+     *   在这一路被解析成「收入 ¥20，商户 快去使用，置信度 90」直接入账。
+     * 同一条通知，两条通道给出相反结论 —— 这不是精度问题，是记账被写脏。
+     *
+     * 现在两条通道共用同一套策略与分字段解析：
+     *   · 拿得到 Notification 对象 → 完整判断（渠道/组摘要/常驻/会话标题）
+     *   · 拿不到（MIUI 常见）→ 至少走包级策略 + 压平文本，并把置信度按策略压低
+     */
+    private void deliverNotification(String pkg, Notification n, String title,
+                                     String text, String big, String raw) {
+        long now = System.currentTimeMillis();
+        NotifPolicy.Decision d;
+        String channelId = "";
+        String body = big.isEmpty() ? text : big;
+
+        if (n != null) {
+            channelId = BillNotificationListener.channelOf(n);
+            // 策略拿的是「标题 + 正文」合并串，与监听通道保持一致
+            d = NotifPolicy.decide(pkg, channelId, title,
+                    (title + " " + body).trim(),
+                    BillNotificationListener.isGroupSummary(n),
+                    BillNotificationListener.isOngoing(n),
+                    BillNotificationListener.conversationTitle(n));
+        } else {
+            d = NotifPolicy.decide(pkg, "", "", raw, false, false, "");
+        }
+
+        if (d.isSkip()) {
+            Log.i(TAG, "· 不记账[" + pkg + "/" + channelId + "] " + d.reason
+                    + "  " + truncate(raw));
+            com.aron.autobill.core.NotifLog.record(now, pkg, title, raw,
+                    com.aron.autobill.core.NotifLog.FILTER, d.reason);
+            return;
+        }
+
+        if (d.verdict == NotifPolicy.PLACEHOLDER) {
+            // 有交易但金额不在通知里（微信转账卡片）：不记假账，提示用户补金额
+            Log.i(TAG, "? 待补全[" + pkg + "/" + channelId + "] " + d.reason);
+            com.aron.autobill.core.NotifLog.record(now, pkg, title, raw,
+                    com.aron.autobill.core.NotifLog.SKIP, "待补全：" + d.reason);
+            BillProcessor.notifyPlaceholder(this, pkg, title, raw);
+            return;
+        }
+
+        com.aron.autobill.core.NotifLog.record(now, pkg, title, raw,
+                com.aron.autobill.core.NotifLog.ACCEPT, d.reason);
+
+        if (n != null) {
+            // 分字段解析：title 常常就是 App 名，拼进正文会被当成商户
+            BillProcessor.processNotification(this, store, parser, pkg,
+                    title, text, big, "notification", d.confCap, d.titleAsMerchant);
+        } else {
+            // 拿不到 Notification：只剩压平文本可解析。
+            // 仍走 processNotification，好处是 confCap / titleAsMerchant 能生效，
+            // 判定为低可信的通知会被压到门槛以下、进待确认队列而不是直接入账。
+            BillProcessor.processNotification(this, store, parser, pkg,
+                    "", raw, "", "notification", d.confCap, d.titleAsMerchant);
+        }
     }
 
     /** 清掉过期指纹，避免长跑内存膨胀 */

@@ -255,11 +255,19 @@ public class BillNotificationListener extends NotificationListenerService {
         dispatch(pkg, f.title, f.text, f.bigText, d, eventTs > 0 ? eventTs : now);
     }
 
-    /** 渠道 ID（API 26+ 才有；MIUI 老版本可能返回 null） */
-    private static String channelOf(StatusBarNotification sbn) {
+    /** 渠道 ID（API 26+ 才有；MIUI 老版本可能返回 null）。无障碍通道也复用这一份。 */
+    static String channelOf(StatusBarNotification sbn) {
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                String id = sbn.getNotification() == null ? null : sbn.getNotification().getChannelId();
+            return sbn == null ? "" : channelOf(sbn.getNotification());
+        } catch (Throwable ignored) {}
+        return "";
+    }
+
+    /** 渠道 ID 的 Notification 版本（无障碍服务拿不到 StatusBarNotification） */
+    static String channelOf(Notification n) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && n != null) {
+                String id = n.getChannelId();
                 return id == null ? "" : id;
             }
         } catch (Throwable ignored) {}
@@ -273,7 +281,7 @@ public class BillNotificationListener extends NotificationListenerService {
      * 结果是被当成一笔账 —— 用户看到凭空多出的支出，且金额无从解释。
      * 系统自己用 FLAG_GROUP_SUMMARY 标了出来，直接采信。
      */
-    private static boolean isGroupSummary(Notification n) {
+    static boolean isGroupSummary(Notification n) {
         if (n == null) return false;
         try {
             return (n.flags & Notification.FLAG_GROUP_SUMMARY) != 0;
@@ -281,7 +289,7 @@ public class BillNotificationListener extends NotificationListenerService {
     }
 
     /** 常驻通知：正在通话、音乐播放、充电中 —— 永不结束，不可能是交易 */
-    private static boolean isOngoing(Notification n) {
+    static boolean isOngoing(Notification n) {
         if (n == null) return false;
         try {
             return (n.flags & Notification.FLAG_ONGOING_EVENT) != 0;
@@ -296,7 +304,7 @@ public class BillNotificationListener extends NotificationListenerService {
      * EXTRA_CONVERSATION_TITLE 是系统给聊天通知打的标记，
      * 有它就说明这是会话，不是交易凭证。
      */
-    private static String conversationTitle(Notification n) {
+    static String conversationTitle(Notification n) {
         if (n == null || n.extras == null) return "";
         try {
             CharSequence c = n.extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE);
