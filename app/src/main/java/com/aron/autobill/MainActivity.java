@@ -87,6 +87,9 @@ public class MainActivity extends AppCompatActivity {
         super.onResume();
         if (contentHome != null) {
             healListener();
+            // 常驻通知的状态文案由保活服务自己按 5 分钟节奏刷，中间会停在旧状态上
+            // （刚把通知使用权打开，通知栏还写着"未开启"）。回前台补刷一次。
+            KeepAliveService.refresh(this);
             reload();
         }
     }
