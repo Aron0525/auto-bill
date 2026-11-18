@@ -126,8 +126,8 @@ public final class UpdateFlow {
         Toast.makeText(activity, "正在检查更新…", Toast.LENGTH_SHORT).show();
         new Thread(() -> {
             try {
-                // fetchInfo 自动识别两种托管方式：
-                //   · owner/repo 或 api.github.com/... → 按 GitHub Releases 解析
+                // fetchInfo 自己判断走哪条通道，这里不用管：
+                //   · owner/repo（含仓库链接、API 链接）→ 先 raw 静态 update.json，再 Releases API
                 //   · 其他 http(s)/file 地址 → 按自建 update.json 解析
                 final UpdateChecker.UpdateInfo info = UpdateChecker.fetchInfo(jsonUrl, TIMEOUT_MS);
                 activity.runOnUiThread(() -> {
