@@ -46,17 +46,48 @@ $env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.21.9-hotspot"
 
 function Step($m) { Write-Host "`n=== $m ===" -ForegroundColor Cyan }
 
+<#
+原生命令的安全调用。
+
+脚本头顶是 $ErrorActionPreference = "Stop"，而 PowerShell 5.1 会把原生命令的
+**stderr 一行**当成错误记录；Stop 之下第一行 stderr 就抛异常，$LASTEXITCODE
+还没轮到检查。后果很荒唐：gradle 打一行进度、git 打一句 "LF will be replaced"
+就能把发版打断，而且报出来是个空 message，看不出任何线索。
+
+所以统一走这个函数：临时把 EAP 放回 Continue，把 stdout/stderr 一起收下来，
+按退出码判定成败，失败时把最后 20 行原样打出来。
+#>
+function Exec([string]$exe, [string[]]$argv, [string]$label) {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $out = & $exe @argv 2>&1
+        $rc = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    $out | ForEach-Object { Write-Host $_ }
+    if ($rc -ne 0) {
+        $tail = ($out | Select-Object -Last 20) -join "`n"
+        throw "$label 失败（exit=$rc）`n$tail"
+    }
+    return $out
+}
+
 # ---------- ① 版本号 + 构建 ----------
 Step "① 构建 v$VersionName (versionCode $VersionCode)"
 Set-Location $root
 $bg = Join-Path $root "app\build.gradle"
-(Get-Content $bg -Raw -Encoding UTF8) `
+# 必须写成**无 BOM** 的 UTF-8。
+# Set-Content -Encoding UTF8 在 PS 5.1 下会加 BOM，Gradle 的 Groovy 解析器读到
+# 行首那个 U+FEFF 直接报 "Unexpected character: '?' @ line 1, column 1"，
+# 整个构建在这一步就死，而报错信息里看不出跟版本号有任何关系。
+$bgText = (Get-Content $bg -Raw -Encoding UTF8) `
     -replace 'versionCode\s+\d+', "versionCode $VersionCode" `
-    -replace 'versionName\s+"[^"]+"', "versionName `"$VersionName`"" |
-    Set-Content $bg -Encoding UTF8 -NoNewline
+    -replace 'versionName\s+"[^"]+"', "versionName `"$VersionName`""
+[System.IO.File]::WriteAllText($bg, $bgText, (New-Object System.Text.UTF8Encoding($false)))
 
-& $gradle -p $root --offline assembleDebug
-if ($LASTEXITCODE -ne 0) { throw "构建失败" }
+Exec $gradle @("-p", $root, "--offline", "assembleDebug") "构建" | Out-Null
 
 $apk = Join-Path $root "app\build\outputs\apk\debug\app-debug.apk"
 $sha = (Get-FileHash $apk -Algorithm SHA256).Hash
@@ -65,8 +96,12 @@ Write-Host "APK: $([math]::Round($size/1MB,2)) MB"
 Write-Host "SHA256: $sha"
 
 # ---------- token ----------
-$tok = (( "protocol=https`nhost=github.com`n" | git credential fill 2>$null ) |
-        Select-String -Pattern '^password=(.+)$').Matches.Groups[1].Value
+# 取凭据时 EAP=Stop 会因为 git 往 stderr 说话而中断，这里临时放宽
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$cred = "protocol=https`nhost=github.com`n" | git credential fill 2>$null
+$ErrorActionPreference = $prevEap
+$tok = ($cred | Select-String -Pattern '^password=(.+)$').Matches.Groups[1].Value
 if (-not $tok) { throw "未能从 Git 凭据管理器取到 GitHub token" }
 $H = @{ Authorization = "Bearer $tok"; Accept = "application/vnd.github+json";
         "User-Agent" = "autobill-release" }
@@ -93,12 +128,13 @@ Write-Host "Release id=$($rel.id)"
 # ---------- ③ 上传 APK（直连，代理会卡 starter）----------
 Step "③ 上传 APK（直连 uploads.github.com）"
 $tmp = Join-Path $env:TEMP "asset.json"
-& curl.exe -sS --connect-timeout 20 --max-time 600 `
-    -H "Authorization: Bearer $tok" `
-    -H "Content-Type: application/vnd.android.package-archive" `
-    --data-binary "@$apk" `
-    -o $tmp -w "HTTP %{http_code}  %{size_upload} bytes  %{time_total}s`n" `
-    "https://uploads.github.com/repos/$Repo/releases/$($rel.id)/assets?name=$assetName"
+Exec "curl.exe" @("-sS", "--connect-timeout", "20", "--max-time", "600",
+    "-H", "Authorization: Bearer $tok",
+    "-H", "Content-Type: application/vnd.android.package-archive",
+    "--data-binary", "@$apk",
+    "-o", $tmp,
+    "-w", "HTTP %{http_code}  %{size_upload} bytes  %{time_total}s",
+    "https://uploads.github.com/repos/$Repo/releases/$($rel.id)/assets?name=$assetName") | Out-Null
 $a = Get-Content $tmp -Raw | ConvertFrom-Json
 if ($a.state -ne "uploaded") {
     throw "上传未完成（state=$($a.state)）。可稍后重试或删除该资产重传：`n  https://api.github.com/repos/$Repo/releases/assets/$($a.id)"
@@ -122,8 +158,15 @@ $u = @{ versionCode = $VersionCode; versionName = $VersionName
 [System.IO.File]::WriteAllText((Join-Path $root "update.json"), $u,
     (New-Object System.Text.UTF8Encoding($false)))
 
-git add build.gradle app/build.gradle update.json
-git commit -m "release: v$VersionName (versionCode $VersionCode)"
-if ($GitProxy) { git -c http.proxy=$GitProxy push origin main } else { git push origin main }
+# git 在 add 时会往 stderr 打 "LF will be replaced by CRLF" 之类警告，
+# EAP=Stop 下能把发版打断在半路（此时 Release 已经建好、APK 已经上传，
+# 只剩 update.json 没生效，状态很难看）。所以一律走 Exec。
+Exec "git" @("add", "build.gradle", "app/build.gradle", "update.json") "git add" | Out-Null
+Exec "git" @("commit", "-m", "release: v$VersionName (versionCode $VersionCode)") "git commit" | Out-Null
+if ($GitProxy) {
+    Exec "git" @("-c", "http.proxy=$GitProxy", "push", "origin", "main") "git push" | Out-Null
+} else {
+    Exec "git" @("push", "origin", "main") "git push" | Out-Null
+}
 
 Write-Host "`n✅ v$VersionName 发布完成。旧版 App 打开「检查更新」即可看到。" -ForegroundColor Green
