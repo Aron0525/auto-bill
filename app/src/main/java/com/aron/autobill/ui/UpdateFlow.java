@@ -96,7 +96,7 @@ public final class UpdateFlow {
 
         TextView tip = new TextView(activity);
         tip.setText("填两种地址都行：\n"
-                + "· GitHub 仓库：owner/repo（如 aron/AutoBill）—— 不需要局域网\n"
+                + "· GitHub 仓库：owner/repo，或直接粘仓库/Release 页面链接\n"
                 + "· 自建服务器：http(s)://…/update.json\n"
                 + "当前版本：" + localName(activity) + " (" + localCode(activity) + ")");
         tip.setTextSize(12);

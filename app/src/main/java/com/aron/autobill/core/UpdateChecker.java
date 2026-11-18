@@ -666,7 +666,11 @@ public final class UpdateChecker {
      *   本身不过期），即可全程绕开限流。
      */
     public static UpdateInfo fetchInfo(String url, int timeoutMs) throws Exception {
-        String ownerRepo = normalizeOwnerRepo(url);
+        // 先把「仓库网页链接 / API 链接 / 带 .git 的克隆地址」统一成 owner/repo。
+        // 不归一化的话，用户贴 https://github.com/o/r 会被当成静态 JSON 地址，
+        // 拉回来的是 HTML，parse 返回 null，界面上只剩一句「更新信息不可用」。
+        String target = canonicalTarget(url);
+        String ownerRepo = normalizeOwnerRepo(target);
         if (ownerRepo != null) {
             // ① raw 静态 update.json：优先
             Exception rawError = null;
@@ -700,10 +704,73 @@ public final class UpdateChecker {
             if (rawError != null) throw rawError;
             return null;
         }
-        if (isGithubRelease(url)) {
-            return parseGithubRelease(fetch(url, timeoutMs));
+        if (isGithubRelease(target)) {
+            return parseGithubRelease(fetch(target, timeoutMs));
         }
-        return parse(fetch(url, timeoutMs));
+        return parse(fetch(target, timeoutMs));
+    }
+
+    /** github.com 的各种前缀写法，长的排前面（避免 www. 被短前缀截掉） */
+    private static final String[] GH_PREFIXES = {
+            "https://www.github.com/", "http://www.github.com/",
+            "https://github.com/", "http://github.com/", "github.com/"
+    };
+
+    /**
+     * 把用户可能粘进来的各种 GitHub 地址归一成 owner/repo。
+     *
+     * 设置页那一格是自由输入，实际会被粘成什么样很难猜，已知见过的：
+     *   https://github.com/Aron0525/auto-bill              仓库首页
+     *   https://github.com/Aron0525/auto-bill/releases     发布页
+     *   https://github.com/Aron0525/auto-bill/releases/latest
+     *   https://github.com/Aron0525/auto-bill.git          clone 地址
+     *   https://api.github.com/repos/Aron0525/auto-bill/releases/latest
+     *
+     * 这些以前都不认，只有「裸 owner/repo」能走通静态通道。最难受的是贴 API 地址：
+     * 它会直达按 IP 限流 60 次/小时的接口，撞 403 之后用户完全不知道该怎么办。
+     * 归一成 owner/repo 后一律先走不限流的 raw 静态通道。
+     *
+     * 例外：raw.githubusercontent.com 的直链原样保留 —— 那串路径里的分支名和
+     * 文件名是有意义的，抠成 owner/repo 反而丢了用户的选择。
+     */
+    public static String canonicalTarget(String s) {
+        if (s == null) return "";
+        String t = s.trim();
+        if (t.isEmpty()) return "";
+
+        String low = t.toLowerCase();
+
+        if (low.startsWith("https://raw.githubusercontent.com/")
+                || low.startsWith("http://raw.githubusercontent.com/")) {
+            return t;
+        }
+
+        if (low.startsWith("https://api.github.com/repos/") || low.startsWith("http://api.github.com/repos/")) {
+            String rest = t.substring(low.indexOf("/repos/") + "/repos/".length());
+            String repo = firstTwoSegments(rest);
+            return repo == null ? t : repo;
+        }
+
+        for (String p : GH_PREFIXES) {
+            if (low.startsWith(p)) {
+                String repo = firstTwoSegments(t.substring(p.length()));
+                return repo == null ? t : repo;
+            }
+        }
+        return t;
+    }
+
+    /** "owner/repo/..." → "owner/repo"；段数不够或含怪字符返回 null */
+    private static String firstTwoSegments(String rest) {
+        if (rest == null) return null;
+        String[] seg = rest.split("[/?#]");
+        if (seg.length < 2) return null;
+        String owner = seg[0];
+        String repo = seg[1];
+        if (repo.endsWith(".git")) repo = repo.substring(0, repo.length() - 4);
+        if (owner.isEmpty() || repo.isEmpty()) return null;
+        if (!owner.matches("[A-Za-z0-9._-]+") || !repo.matches("[A-Za-z0-9._-]+")) return null;
+        return owner + "/" + repo;
     }
 
     /**

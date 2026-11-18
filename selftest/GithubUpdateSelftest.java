@@ -409,6 +409,47 @@ public class GithubUpdateSelftest {
         eq("cmp_null", "null 安全", Integer.MIN_VALUE,
                 UpdateChecker.compareVersionName(null, "2.2"));
 
+        // ============================================================
+        // M. 用户粘进来的各种 GitHub 地址（设置页是自由输入）
+        // ============================================================
+        //
+        // 以前只有裸 owner/repo 能走通。粘仓库首页 → 当成 JSON 地址拉 HTML →
+        // 「更新信息不可用」；粘 API 地址 → 直奔限流接口 → 403。
+        eq("canon_repo_url", "仓库首页链接 → owner/repo", "Aron0525/auto-bill",
+                UpdateChecker.canonicalTarget("https://github.com/Aron0525/auto-bill"));
+        eq("canon_repo_trailing", "结尾斜杠", "Aron0525/auto-bill",
+                UpdateChecker.canonicalTarget("https://github.com/Aron0525/auto-bill/"));
+        eq("canon_releases", "releases 页面", "Aron0525/auto-bill",
+                UpdateChecker.canonicalTarget("https://github.com/Aron0525/auto-bill/releases"));
+        eq("canon_releases_latest", "releases/latest", "Aron0525/auto-bill",
+                UpdateChecker.canonicalTarget("https://github.com/Aron0525/auto-bill/releases/latest"));
+        eq("canon_dot_git", "clone 地址的 .git", "Aron0525/auto-bill",
+                UpdateChecker.canonicalTarget("https://github.com/Aron0525/auto-bill.git"));
+        eq("canon_www", "www. 前缀", "Aron0525/auto-bill",
+                UpdateChecker.canonicalTarget("https://www.github.com/Aron0525/auto-bill"));
+        eq("canon_api", "API 地址 → owner/repo（绕开限流）", "Aron0525/auto-bill",
+                UpdateChecker.canonicalTarget(
+                        "https://api.github.com/repos/Aron0525/auto-bill/releases/latest"));
+        eq("canon_query", "带 query 的地址", "Aron0525/auto-bill",
+                UpdateChecker.canonicalTarget("https://github.com/Aron0525/auto-bill?tab=readme"));
+        eq("canon_raw_keep", "raw 直链原样保留（分支/文件名有意义）",
+                "https://raw.githubusercontent.com/a/b/dev/update.json",
+                UpdateChecker.canonicalTarget("https://raw.githubusercontent.com/a/b/dev/update.json"));
+        eq("canon_static_keep", "自建服务器地址原样保留",
+                "http://192.168.1.5:8899/update.json",
+                UpdateChecker.canonicalTarget("http://192.168.1.5:8899/update.json"));
+        eq("canon_incomplete", "只有 owner 的地址不动（认不出就是认不出）",
+                "https://github.com/Aron0525",
+                UpdateChecker.canonicalTarget("https://github.com/Aron0525"));
+        eq("canon_empty", "空串", "", UpdateChecker.canonicalTarget(""));
+        eq("canon_null", "null 安全", "", UpdateChecker.canonicalTarget(null));
+
+        // 归一化之后必须能进静态通道（这是修这个 bug 的全部意义）
+        ok("canon_then_owner_repo", "仓库链接归一后能被 normalizeOwnerRepo 认出来",
+                "Aron0525/auto-bill".equals(UpdateChecker.normalizeOwnerRepo(
+                        UpdateChecker.canonicalTarget("https://github.com/Aron0525/auto-bill"))),
+                "归一后仍认不出");
+
         System.out.println();
         System.out.println("==== GitHub 更新自检: " + pass + " 通过 / " + fail + " 失败 ====");
         if (fail > 0) System.exit(1);
