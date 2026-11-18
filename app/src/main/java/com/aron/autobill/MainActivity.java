@@ -12,6 +12,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -79,7 +80,26 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        if (contentHome != null) reload();
+        if (contentHome != null) {
+            healListener();
+            reload();
+        }
+    }
+
+    /**
+     * 覆盖安装（走系统安装器升级 APK）会把通知监听的绑定一起踢掉，
+     * 权限还在 Secure 设置里，但服务不再处于已连接状态。
+     * 这是 MIUI / HyperOS 上最隐蔽的一种「突然不记账」。
+     *
+     * 每次回到前台自检一次：权限在、服务却没连上，就请求系统重绑并拉起保活服务。
+     * requestRebind 幂等，正常机器走不到这里。
+     */
+    private void healListener() {
+        if (com.aron.autobill.core.NotifLog.started()) return;
+        if (!com.aron.autobill.core.NotifBinder.enabled(this)) return;
+        Log.i("AutoBill", "回到前台：监听未连接，尝试重绑");
+        com.aron.autobill.core.NotifBinder.rebind(this, BillNotificationListener.class);
+        KeepAliveService.start(this);
     }
 
     @Override
