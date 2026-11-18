@@ -28,6 +28,7 @@ public class UpdateSelftest {
         testParse();
         testHasNewer();
         testResolve();
+        testRawChannel();
         testSha256();
         testFetchDownload();
         testTamper();
@@ -102,6 +103,39 @@ public class UpdateSelftest {
         eq("file 原样", "file:///tmp/a.apk", UpdateChecker.resolveApkUrl(base, "file:///tmp/a.apk"));
         eq("空地址", "", UpdateChecker.resolveApkUrl(base, ""));
         eq("null 地址", "", UpdateChecker.resolveApkUrl(base, null));
+
+        // 基准不是地址：用户填的是 owner/repo。以前会拼出 "Aron0525/a.apk"
+        // （无 scheme），下载时报 "no protocol"，排查全靠猜。
+        eq("owner/repo 当基准 → 无法解析", "",
+                UpdateChecker.resolveApkUrl("Aron0525/auto-bill", "a.apk"));
+        eq("空基准 → 无法解析", "", UpdateChecker.resolveApkUrl("", "a.apk"));
+    }
+
+    // ---------- raw 静态通道（相对 apkUrl 必须在这里补全） ----------
+    static void testRawChannel() throws Exception {
+        System.out.println("\n【raw 静态通道】");
+
+        eq("raw 地址 main", "https://raw.githubusercontent.com/a/b/main/update.json",
+                UpdateChecker.rawUpdateUrl("a/b", "main"));
+        eq("raw 地址 master", "https://raw.githubusercontent.com/a/b/master/update.json",
+                UpdateChecker.rawUpdateUrl("a/b", "master"));
+
+        File dir = tempDir();
+        File json = new File(dir, "update.json");
+        String body = "{\"versionCode\":13,\"versionName\":\"2.3\",\"apkUrl\":\"autobill-v2.3.apk\"}";
+        try (FileOutputStream out = new FileOutputStream(json)) {
+            out.write(body.getBytes(StandardCharsets.UTF_8));
+        }
+
+        UpdateChecker.UpdateInfo info = UpdateChecker.fetchFromRaw(json.toURI().toString(), 5000);
+        ok("raw 通道能解析", info != null && info.versionCode == 13, String.valueOf(info));
+        if (info != null) {
+            // 必须是以 update.json 所在目录为基准的绝对地址
+            String want = dir.toURI().toString() + "autobill-v2.3.apk";
+            eq("相对 apkUrl 补成绝对地址", want, info.apkUrl);
+            // 再被 UI 层解析一次也不能变（绝对地址原样返回）
+            eq("二次解析不重复拼接", want, UpdateChecker.resolveApkUrl("Aron0525/auto-bill", info.apkUrl));
+        }
     }
 
     // ---------- SHA-256 ----------

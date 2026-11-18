@@ -220,14 +220,23 @@ public final class UpdateChecker {
     /**
      * 把 update.json 里相对的 apkUrl 解析成绝对地址（相对 update.json 所在目录）。
      * 已经是 http/https/file 开头的原样返回。
+     *
+     * 基准不是地址（比如用户手填的 `owner/repo`）时返回空串 ——
+     * 拿它当路径去切只会拼出 `Aron0525/x.apk` 这种没有 scheme 的废地址，
+     * 报错变成「no protocol」，比直接说「地址无效」难查得多。
      */
     public static String resolveApkUrl(String jsonUrl, String apkUrl) {
         if (apkUrl == null || apkUrl.isEmpty()) return "";
         String u = apkUrl.trim();
-        if (u.startsWith("http://") || u.startsWith("https://") || u.startsWith("file://")) return u;
-        int cut = jsonUrl.lastIndexOf('/');
+        // file: 后面斜杠个数不固定（File.toURI() 生成的是 file:/C:/…，手写常是 file:///…），
+        // 自检用 file: 当服务器，两种都得认。
+        if (u.startsWith("http://") || u.startsWith("https://") || u.startsWith("file:")) return u;
+        if (jsonUrl == null) return "";
+        String base = jsonUrl.trim();
+        if (!base.startsWith("http://") && !base.startsWith("https://") && !base.startsWith("file:")) return "";
+        int cut = base.lastIndexOf('/');
         if (cut < 0) return u;
-        return jsonUrl.substring(0, cut + 1) + u;
+        return base.substring(0, cut + 1) + u;
     }
 
     // ==================== ③ HTTP 拉取 ====================
@@ -524,12 +533,48 @@ public final class UpdateChecker {
     // ==================== ③c 统一入口 ====================
 
     /**
+     * 静态通道要试的分支名。
+     *
+     * 原来只写死 `main` —— 仓库默认分支是 master 的用户，静态通道必然 404，
+     * 只能落到按 IP 限流的 API 上，等于把「国内能不能更新」交给运气。
+     * 两个都试，代价只是失败时多一次请求。
+     */
+    private static final String[] BRANCHES = {"main", "master"};
+
+    /** raw 静态通道的 update.json 地址 */
+    public static String rawUpdateUrl(String ownerRepo, String branch) {
+        return "https://raw.githubusercontent.com/" + ownerRepo + "/" + branch + "/update.json";
+    }
+
+    /**
+     * 走 raw 静态通道取一份 update.json，并把 apkUrl 就地补成绝对地址。
+     *
+     * ==================== 为什么相对地址必须在这里解析 ====================
+     *
+     * UI 层拿到 info 后是用「用户填的那串东西」当基准去拼 apkUrl 的。
+     * 用户填 `Aron0525/auto-bill`（owner/repo，不是 URL）时，
+     * resolveApkUrl 会把它当路径切一刀，拼出 `Aron0525/autobill-v2.3.apk`
+     * —— 没有 scheme，new URL() 直接抛 MalformedURLException，
+     * 用户看到的是「下载失败：no protocol: Aron0525/...」。
+     *
+     * 只有这里知道真正取到 JSON 的那个地址（raw.githubusercontent.com/.../main/...），
+     * 所以基准只能在这里。返回的 info.apkUrl 一律是绝对地址，
+     * UI 层再调一次 resolveApkUrl 也是原样返回，不会二次拼接。
+     */
+    public static UpdateInfo fetchFromRaw(String rawUrl, int timeoutMs) throws Exception {
+        UpdateInfo info = parse(fetch(rawUrl, timeoutMs));
+        if (info == null) return null;
+        info.apkUrl = resolveApkUrl(rawUrl, info.apkUrl);
+        return info;
+    }
+
+    /**
      * 按配置的地址取版本信息 —— 自动识别 GitHub Releases 或自建 update.json。
      *
      * 这样设置页只要存一个字符串，两种托管方式都能用，用户不用关心细节。
      *
      * owner/repo 形式的地址走「双通道」：
-     *   ① 先试 raw.githubusercontent.com/{repo}/main/update.json
+     *   ① 先试 raw.githubusercontent.com/{repo}/{main|master}/update.json
      *      —— CDN 静态分发、无 API 速率限制、国内连通性也好。
      *   ② 失败再试 api.github.com 的 Releases API
      *      —— 该 API 按 IP 限流（未登录 60 次/小时），VPN 共享出口、
@@ -543,14 +588,16 @@ public final class UpdateChecker {
         if (ownerRepo != null) {
             // ① raw 静态 update.json：优先
             Exception rawError = null;
-            String raw = "https://raw.githubusercontent.com/" + ownerRepo + "/main/update.json";
             UpdateInfo info = null;
-            try {
-                info = parse(fetch(raw, timeoutMs));
-            } catch (Exception e) {
-                rawError = e;
+            for (String branch : BRANCHES) {
+                try {
+                    UpdateInfo i = fetchFromRaw(rawUpdateUrl(ownerRepo, branch), timeoutMs);
+                    if (i != null && !i.apkUrl.isEmpty()) { info = i; break; }
+                } catch (Exception e) {
+                    if (rawError == null) rawError = e;
+                }
             }
-            if (info != null && !info.apkUrl.isEmpty()) return info;
+            if (info != null) return info;
 
             // ② Releases API：兜底
             try {

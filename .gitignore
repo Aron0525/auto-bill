@@ -39,3 +39,4 @@ keystore.properties
 *.db
 *.db-journal
 node_modules/
+build-probe/
