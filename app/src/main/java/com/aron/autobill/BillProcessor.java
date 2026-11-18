@@ -200,6 +200,9 @@ public final class BillProcessor {
                     + " " + r.merchant + " [" + category + "] 置信度=" + r.confidence
                     + (needConfirm ? " (待确认)" : ""));
             showBillNotification(ctx, bill, category, needConfirm);
+            // 常驻通知上的计数变化，是「监听真的在干活」的可见证据。
+            // 付了钱但数字不动，用户当场就知道有问题，不用等一周才发现账本缺了一截。
+            KeepAliveService.refresh(ctx);
             ctx.sendBroadcast(new Intent("com.aron.autobill.BILL_ADDED").setPackage(ctx.getPackageName()));
         } else {
             Log.i(TAG, "· 重复(指纹)[" + channel + "] " + dir + " " + r.merchant);

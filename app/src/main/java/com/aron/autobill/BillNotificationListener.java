@@ -186,7 +186,13 @@ public class BillNotificationListener extends NotificationListenerService {
         String key = pkg + ":" + sbn.getId() + ":" + n.when;
         long now = System.currentTimeMillis();
         Long last = seen.get(key);
-        if (last != null && now - last < DEDUP_TTL_MS) return;
+        if (last != null && now - last < DEDUP_TTL_MS) {
+            // 重复投递也要留痕 —— 监控里看到「重复 5 条」能说明系统在反复推，
+            // 而不是我们漏记。
+            com.aron.autobill.core.NotifLog.record(now, pkg, null, "（重复投递）",
+                    com.aron.autobill.core.NotifLog.DEDUP, "通知身份重复");
+            return;
+        }
         seen.put(key, now);
         prune(now);
 
@@ -195,7 +201,11 @@ public class BillNotificationListener extends NotificationListenerService {
         //      拼进正文会污染商户名。
         Fields f = extractFields(n);
         String text = f.flat;
-        if (text.isEmpty() || text.length() < 4) return;
+        if (text.isEmpty() || text.length() < 4) {
+            com.aron.autobill.core.NotifLog.record(now, pkg, f.title, text,
+                    com.aron.autobill.core.NotifLog.SKIP, "正文为空或过短");
+            return;
+        }
 
         // ---- 第二道闸：渠道/类型准入（在解析器之前）----
         // 这里是本轮精准度改造的核心：App 自己已经把通知分好类了
@@ -212,6 +222,8 @@ public class BillNotificationListener extends NotificationListenerService {
         if (d.isSkip()) {
             Log.i(TAG, "· 跳过[" + pkg + "/" + channelId + "] " + d.reason
                     + "  " + truncate(text));
+            com.aron.autobill.core.NotifLog.record(now, pkg, f.title, text,
+                    com.aron.autobill.core.NotifLog.FILTER, d.reason);
             return;
         }
 
@@ -222,6 +234,8 @@ public class BillNotificationListener extends NotificationListenerService {
         if (d.verdict == NotifPolicy.PLACEHOLDER) {
             Log.i(TAG, "? 待补全[" + pkg + "/" + channelId + "] " + d.reason
                     + "  " + truncate(text));
+            com.aron.autobill.core.NotifLog.record(now, pkg, f.title, text,
+                    com.aron.autobill.core.NotifLog.SKIP, "待补全：" + d.reason);
             BillProcessor.notifyPlaceholder(this, pkg, f.title, text);
             return;
         }
@@ -229,10 +243,14 @@ public class BillNotificationListener extends NotificationListenerService {
         // 快速预筛：没有支付语义的通知直接跳过，避免把聊天/广告送去解析
         if (!looksLikeTransaction(text) && d.verdict == NotifPolicy.PARSE) {
             Log.i(TAG, "· 非遗漏(无支付语义)[" + pkg + "] " + truncate(text));
+            com.aron.autobill.core.NotifLog.record(now, pkg, f.title, text,
+                    com.aron.autobill.core.NotifLog.FILTER, "无支付语义");
             return;
         }
 
         Log.i(TAG, "通知[" + pkg + "/" + channelId + "] " + d.reason + " " + truncate(text));
+        com.aron.autobill.core.NotifLog.record(now, pkg, f.title, text,
+                com.aron.autobill.core.NotifLog.ACCEPT, d.reason);
         // 账目时间用交易时间，不是处理时间：断线补捞时两者能差半小时，跨零点就会记错天
         dispatch(pkg, f.title, f.text, f.bigText, d, eventTs > 0 ? eventTs : now);
     }

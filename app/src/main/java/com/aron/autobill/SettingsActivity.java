@@ -122,15 +122,29 @@ public class SettingsActivity extends AppCompatActivity {
         boolean on = isNotificationAccessGranted();
         TextView state = findViewById(R.id.tv_notif_state);
         TextView hint = findViewById(R.id.tv_notif_hint);
+        StringBuilder sb = new StringBuilder();
         if (on) {
             state.setText("已开启");
             state.setTextColor(ContextCompat.getColor(this, R.color.brand_teal));
-            hint.setText("已能读取完整通知正文，识别准确率显著高于只靠无障碍");
+            if (com.aron.autobill.core.NotifLog.started()) {
+                sb.append(com.aron.autobill.core.NotifLog.healthLine(System.currentTimeMillis()));
+            } else {
+                // 授权是开的但服务没连上：这是最容易让人以为「功能坏了」的状态
+                sb.append("已授权，但监听服务还没连上（进程可能刚被系统回收）。")
+                  .append("\n点这里可请求重新连接");
+            }
+            long lastAt = com.aron.autobill.core.NotifLog.lastAt();
+            if (lastAt > 0) {
+                sb.append("\n最近一条 ").append(new java.text.SimpleDateFormat(
+                        "MM-dd HH:mm", java.util.Locale.CHINA)
+                        .format(new java.util.Date(lastAt)));
+            }
         } else {
             state.setText("未开启");
             state.setTextColor(ContextCompat.getColor(this, R.color.warn));
-            hint.setText("开启后能读到完整通知正文，识别准确率显著高于只靠无障碍");
+            sb.append("开启后能读到完整通知正文，识别准确率显著高于只靠无障碍");
         }
+        hint.setText(sb.toString());
     }
 
     /**
@@ -144,7 +158,16 @@ public class SettingsActivity extends AppCompatActivity {
 
     private void openNotificationAccess() {
         if (isNotificationAccessGranted()) {
-            Toast.makeText(this, "通知使用权已开启", Toast.LENGTH_SHORT).show();
+            // 已授权但服务没连上：先请求一次重绑（用户最常见的困境就是
+            // 权限明明是开的、一条通知也收不到，却不知道能做什么）
+            if (!com.aron.autobill.core.NotifLog.started()) {
+                com.aron.autobill.core.NotifBinder.rebind(this, BillNotificationListener.class);
+                KeepAliveService.start(this);
+                Toast.makeText(this, "已请求重新连接，稍等几秒再看主页状态",
+                        Toast.LENGTH_LONG).show();
+            } else {
+                Toast.makeText(this, "通知使用权已开启，监听正常", Toast.LENGTH_SHORT).show();
+            }
             return;
         }
         // 标准 action 优先；MIUI 有自己的页面，失败再逐级回退

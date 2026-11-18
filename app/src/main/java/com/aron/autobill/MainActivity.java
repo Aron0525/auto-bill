@@ -260,14 +260,47 @@ public class MainActivity extends AppCompatActivity {
         row.addView(summaryCol("本月支出（元）", fmt(month[0])), weightLp());
         row.addView(summaryCol("本月收入（元）", fmt(month[1])), weightLp());
 
-        // ---- 状态行（无障碍）----
+        // ---- 状态行 ----
+        // 两行，分开说两件事：
+        //   通知监听 = 主通道，决定「付了钱到底有没有收到」
+        //   无障碍   = 辅助通道，决定「截图/读屏补记能不能用」
+        // 旧版只查无障碍，于是通知使用权根本没开也会显示「生效中 ✓」——
+        // 用户付了钱没记账，却找不到任何提示。
+        LinearLayout statusBox = new LinearLayout(this);
+        statusBox.setOrientation(LinearLayout.VERTICAL);
+        statusBox.setPadding(dp(18), dp(8), dp(18), dp(2));
+        statusBox.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                startActivity(new Intent(MainActivity.this, SettingsActivity.class));
+            }
+        });
+
+        TextView notifLine = new TextView(this);
+        boolean notifGranted = com.aron.autobill.core.NotifBinder.enabled(this);
+        boolean listening = com.aron.autobill.core.NotifLog.started();
+        if (!notifGranted) {
+            notifLine.setText("通知监听未授权 ✗  点此开启（这是主通道，不开等于没自动记账）");
+            notifLine.setTextColor(col(R.color.expense));
+        } else if (!listening) {
+            notifLine.setText("通知监听已授权，服务未连接 ⚠  点此查看");
+            notifLine.setTextColor(col(R.color.warn));
+        } else {
+            long lastAt = com.aron.autobill.core.NotifLog.lastAt();
+            String tail = lastAt > 0 ? " 最近 " + hhmm(lastAt) : " 还没收到过通知";
+            notifLine.setText("通知监听正常 ✓ 已收 " + com.aron.autobill.core.NotifLog.total()
+                    + " 条，进解析 " + com.aron.autobill.core.NotifLog.accepted() + " 条" + tail);
+            notifLine.setTextColor(col(R.color.ink_sub));
+        }
+        notifLine.setTextSize(11);
+        notifLine.setLineSpacing(dp(2), 1f);
+        statusBox.addView(notifLine);
+
         TextView status = new TextView(this);
         boolean enabled = isAccessibilityEnabled();
-        status.setText(enabled ? "自动记账生效中 ✓   若没记上：截图分享到本应用补记"
-                : "无障碍服务未开启 ✗  点此开启");
+        status.setText(enabled ? "无障碍服务已开启 ✓" : "无障碍服务未开启 ✗  点此开启（截图补记用）");
         status.setTextSize(11);
         status.setTextColor(col(enabled ? R.color.ink_sub : R.color.expense));
-        status.setPadding(dp(18), dp(8), dp(18), dp(4));
+        status.setPadding(0, dp(3), 0, 0);
         if (!enabled) {
             status.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View v) {
@@ -275,7 +308,8 @@ public class MainActivity extends AppCompatActivity {
                 }
             });
         }
-        contentHome.addView(status);
+        statusBox.addView(status);
+        contentHome.addView(statusBox);
 
         // ---- 账单列表 ----
         List<Bill> bills = store.recent(200);
@@ -1131,6 +1165,17 @@ public class MainActivity extends AppCompatActivity {
         String enabled = Settings.Secure.getString(
                 getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
         return enabled != null && enabled.contains(getPackageName());
+    }
+
+    /** 状态行用的短时间：今天只显示 HH:mm，跨天补上日期 */
+    private static String hhmm(long ts) {
+        Calendar then = Calendar.getInstance();
+        then.setTimeInMillis(ts);
+        Calendar today = Calendar.getInstance();
+        boolean sameDay = then.get(Calendar.YEAR) == today.get(Calendar.YEAR)
+                && then.get(Calendar.DAY_OF_YEAR) == today.get(Calendar.DAY_OF_YEAR);
+        SimpleDateFormat f = new SimpleDateFormat(sameDay ? "HH:mm" : "MM-dd HH:mm", Locale.CHINA);
+        return f.format(new Date(ts));
     }
 
     @Override
