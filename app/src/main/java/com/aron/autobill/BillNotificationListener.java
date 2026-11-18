@@ -46,6 +46,18 @@ public class BillNotificationListener extends NotificationListenerService {
     /** 同一通知重复投递的短时去重（30 分钟，与无障碍服务保持一致） */
     private static final long DEDUP_TTL_MS = 30 * 60 * 1000L;
 
+    /**
+     * 断线续捞的时间窗。
+     *
+     * 服务被杀期间收到的通知不会补发，但**还挂在通知栏里**的可以靠
+     * getActiveNotifications() 捞回来。窗口取 30 分钟：
+     *   · 太长 —— 会把用户翻旧账时还挂在栏里的陈旧通知当新交易
+     *   · 太短 —— 重启手机、跨过一次充电后仍在栏里的支付通知就漏了
+     * 重复捞到也不会重复入账：Bill.dedupKey 只由「方向+金额+原文」决定，
+     * 不含时间，同一段原文第二次进库会被 UNIQUE 直接吞掉。
+     */
+    private static final long RECOVER_WINDOW_MS = 30 * 60 * 1000L;
+
     private BillStore store;
     private com.aron.autobill.core.BillParser parser;
     /** "包名:通知ID:when" → 上次处理时间 */
@@ -66,6 +78,55 @@ public class BillNotificationListener extends NotificationListenerService {
         // （它可能刚被 MIUI 清掉）。幂等，重复调用无副作用。
         KeepAliveService.start(this);
         KeepAliveService.refresh(this);
+
+        // 断线期间漏掉的通知：系统不会补发事件，但还挂在通知栏里的能捞回来。
+        // 必须在 start/refresh 之后做 —— 恢复出来的账会让常驻通知的计数变化。
+        recoverMissedNotifications();
+    }
+
+    /**
+     * 捞回「服务不在岗期间」挂在通知栏里的交易通知。
+     *
+     * 为什么必须有：onNotificationPosted 只在服务活着的时候被调用。
+     * MIUI 回收进程后，用户照常付款、通知照常弹，但我们一条都收不到。
+     * 之前这一段是彻底的黑洞 —— 除非用户自己发现账本少了一笔。
+     */
+    private void recoverMissedNotifications() {
+        try {
+            StatusBarNotification[] active = getActiveNotifications();
+            if (active == null || active.length == 0) return;
+
+            long now = System.currentTimeMillis();
+            int n = 0;
+            for (StatusBarNotification s : active) {
+                if (s == null) continue;
+                long when = postTimeOf(s);
+                if (when <= 0 || now - when > RECOVER_WINDOW_MS) continue;
+                try {
+                    handle(s, when);
+                    n++;
+                } catch (Throwable t) {
+                    Log.w(TAG, "补捞单条失败: " + t);
+                }
+            }
+            if (n > 0) Log.i(TAG, "断线补捞：检查了 " + n + " 条仍挂在通知栏的通知");
+            KeepAliveService.refresh(this);
+        } catch (Throwable t) {
+            // 刚连上时个别 ROM 会短暂抛 SecurityException，忽略即可
+            Log.w(TAG, "断线补捞失败: " + t);
+        }
+    }
+
+    /** 通知时间：优先用 Notification.when，缺失时退回 StatusBarNotification.postTime */
+    private static long postTimeOf(StatusBarNotification s) {
+        try {
+            Notification n = s.getNotification();
+            if (n != null && n.when > 0) return n.when;
+        } catch (Throwable ignored) {}
+        try {
+            return s.getPostTime();
+        } catch (Throwable ignored) {}
+        return 0;
     }
 
     /**
@@ -89,7 +150,7 @@ public class BillNotificationListener extends NotificationListenerService {
     @Override
     public void onNotificationPosted(StatusBarNotification sbn) {
         try {
-            handle(sbn);
+            handle(sbn, 0L);
         } catch (Throwable t) {
             // 监听服务崩一次就不再收到任何通知，必须全兜住
             Log.e(TAG, "onNotificationPosted 异常: " + t, t);
@@ -97,6 +158,14 @@ public class BillNotificationListener extends NotificationListenerService {
     }
 
     private void handle(StatusBarNotification sbn) {
+        handle(sbn, 0L);
+    }
+
+    /**
+     * @param eventTs 交易发生时间。0 = 用当前时间（实时通知）；
+     *                断线补捞时传通知自己的 postTime，账目才不会被记到补捞那一刻。
+     */
+    private void handle(StatusBarNotification sbn, long eventTs) {
         if (sbn == null) return;
         if (!Prefs.autoEnabled(this)) return;
 
@@ -164,7 +233,8 @@ public class BillNotificationListener extends NotificationListenerService {
         }
 
         Log.i(TAG, "通知[" + pkg + "/" + channelId + "] " + d.reason + " " + truncate(text));
-        dispatch(pkg, f.title, f.text, f.bigText, d);
+        // 账目时间用交易时间，不是处理时间：断线补捞时两者能差半小时，跨零点就会记错天
+        dispatch(pkg, f.title, f.text, f.bigText, d, eventTs > 0 ? eventTs : now);
     }
 
     /** 渠道 ID（API 26+ 才有；MIUI 老版本可能返回 null） */
@@ -324,10 +394,10 @@ public class BillNotificationListener extends NotificationListenerService {
     }
 
     private void dispatch(String pkg, String title, String text, String bigText,
-                          NotifPolicy.Decision d) {
+                          NotifPolicy.Decision d, long ts) {
         BillProcessor.processNotification(this, store, parser, pkg,
                 title, text, bigText, "notification",
-                d.confCap, d.titleAsMerchant);
+                d.confCap, d.titleAsMerchant, ts);
     }
 
     private void prune(long now) {

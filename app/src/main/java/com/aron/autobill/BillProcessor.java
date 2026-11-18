@@ -51,7 +51,8 @@ public final class BillProcessor {
     public static void process(Context ctx, BillStore store, BillParser parser,
                                String pkg, String raw, String channel) {
         if (raw == null || raw.trim().isEmpty()) return;
-        settle(ctx, store, parser.parse(raw, pkg), raw, pkg, channel);
+        settle(ctx, store, parser.parse(raw, pkg), raw, pkg, channel,
+                System.currentTimeMillis());
     }
 
     /**
@@ -77,6 +78,20 @@ public final class BillProcessor {
                                            String pkg, String title, String text,
                                            String bigText, String channel,
                                            int confCap, boolean titleAsMerchant) {
+        processNotification(ctx, store, parser, pkg, title, text, bigText, channel,
+                confCap, titleAsMerchant, System.currentTimeMillis());
+    }
+
+    /**
+     * 带交易时间的一条通知。
+     *
+     * @param ts 交易发生时间。断线补捞时传通知自己的 postTime，
+     *           否则昨天 23:58 的付款会被记成今天 00:03（跨天、跨月都算错）。
+     */
+    public static void processNotification(Context ctx, BillStore store, BillParser parser,
+                                           String pkg, String title, String text,
+                                           String bigText, String channel,
+                                           int confCap, boolean titleAsMerchant, long ts) {
         String body = (bigText != null && !bigText.trim().isEmpty()) ? bigText
                 : (text == null ? "" : text);
         String raw = ((title == null ? "" : title) + " " + body).replaceAll("\\s+", " ").trim();
@@ -90,7 +105,7 @@ public final class BillProcessor {
             r.merchant = "";
             r.confidence = Math.min(r.confidence, 45);
         }
-        settle(ctx, store, r, raw, pkg, channel);
+        settle(ctx, store, r, raw, pkg, channel, ts);
     }
 
     /**
@@ -137,7 +152,7 @@ public final class BillProcessor {
 
     /** 解析之后的公共落账路径 —— 两条入口只差「怎么解析」，落账必须完全一致 */
     private static void settle(Context ctx, BillStore store, ParseResult r,
-                               String raw, String pkg, String channel) {
+                               String raw, String pkg, String channel, long ts) {
         if (r == null || !r.ok) {
             Log.i(TAG, "✗ 解析失败[" + channel + "] " + truncate(raw));
             return;
@@ -154,7 +169,7 @@ public final class BillProcessor {
             return;
         }
 
-        long ts = System.currentTimeMillis();
+        // ts 来自调用方：正常通知是「现在」，断线补捞是通知自己的 postTime
         String category = Category.classifyFor(r, raw);
 
         // ---- 第三道闸：时间维度去重（跨通道，语义级）----
