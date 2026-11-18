@@ -22,7 +22,7 @@
               就会触发下载，所以它必须晚于 Release 生效。
 
     网络前提（本机实测）：
-        github.com:443          被阻断  → git push / api 需走代理 127.0.0.1:7897
+        github.com:443          时通时断  → git push / api 走代理，端口每次可能变（读 $env:HTTPS_PROXY）
         api.github.com          可达，但未登录限流 60 次/小时 → 全程带 token
         uploads.github.com      可达且走代理会失败 → 直连
         raw.githubusercontent.com  走代理可达
@@ -46,6 +46,11 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $tag = "v$VersionName"
 $assetName = "autobill-v$VersionName.apk"
 $gradle = "E:\DSH\REA\小米钱包\android-toolchain\gradle-8.13\bin\gradle.bat"
+# PATH 里的 git 可能是便携版 MinGit（没有完整 CA 与 credential helper），
+# 在 $ErrorActionPreference=Stop 下推远端会直接 exit=128 且不说明原因。
+# 优先用完整版 Git for Windows；没有才退回 PATH。
+$gitExe = "D:\Program Files\Git\cmd\git.exe"
+if (-not (Test-Path $gitExe)) { $gitExe = "git" }
 $env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.21.9-hotspot"
 
 function Step($m) { Write-Host "`n=== $m ===" -ForegroundColor Cyan }
@@ -78,19 +83,52 @@ function Exec([string]$exe, [string[]]$argv, [string]$label) {
     return $out
 }
 
+<#
+git push 经本机代理会间歇失败（502 / 连接被拒），而同一时刻 curl 打 github.com
+却能 200 —— 单次失败就 throw，会把发版停在半路：版本号没推上去，建 Release 时
+tag 就落在旧提交上。重试几轮即可，不必改任何配置。
+#>
+function PushWithRetry([string]$proxy, [int]$tries = 8) {
+    $argv = @()
+    if ($proxy) { $argv += @("-c", "http.proxy=$proxy") }
+    $argv += @("push", "origin", "main")
+    for ($i = 1; $i -le $tries; $i++) {
+        $prev = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $out = & $gitExe @argv 2>&1
+            $rc = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $prev
+        }
+        if ($rc -eq 0) {
+            $out | ForEach-Object { Write-Host $_ }
+            return $true
+        }
+        if ($i -eq $tries) {
+            $tail = ($out | Select-Object -Last 5) -join "`n"
+            Write-Host "git push 连续 $tries 次失败，先继续后续步骤" -ForegroundColor Red
+            if ($tail) { Write-Host $tail -ForegroundColor DarkGray }
+            return $false
+        }
+        Write-Host "push 第 $i 次失败，2 秒后重试" -ForegroundColor Yellow
+        Start-Sleep -Seconds 2
+    }
+}
+
 # 有暂存内容才提交。发版中途失败后重跑时，版本号那一提交已经存在，
 # 无条件 commit 会因为 "nothing to commit" 直接抛，把重试路堵死。
 function CommitIfStaged([string]$msg) {
     $prev = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        $null = & git diff --cached --quiet 2>&1
+        $null = & $gitExe diff --cached --quiet 2>&1
         $staged = ($LASTEXITCODE -ne 0)
     } finally {
         $ErrorActionPreference = $prev
     }
     if ($staged) {
-        Exec "git" @("commit", "-m", $msg) "git commit" | Out-Null
+        Exec $gitExe @("commit", "-m", $msg) "git commit" | Out-Null
     } else {
         Write-Host "没有待提交的改动，跳过提交（$msg）"
     }
@@ -127,19 +165,15 @@ Write-Host "SHA256: $sha"
 # 这一步先推 build.gradle 的改动，此时 update.json 还没动，客户端拉到的仍是
 # 上一版信息，不会出现「指向还没上传的 APK」的 404 窗口。
 Step "①b 提交版本号（让 tag 落在正确的提交上）"
-Exec "git" @("add", "build.gradle", "app/build.gradle") "git add" | Out-Null
+Exec $gitExe @("add", "build.gradle", "app/build.gradle") "git add" | Out-Null
 CommitIfStaged "chore(release): 版本号升到 v$VersionName (versionCode $VersionCode)"
-if ($GitProxy) {
-    Exec "git" @("-c", "http.proxy=$GitProxy", "push", "origin", "main") "git push" | Out-Null
-} else {
-    Exec "git" @("push", "origin", "main") "git push" | Out-Null
-}
+PushWithRetry $GitProxy
 
 # ---------- token ----------
 # 取凭据时 EAP=Stop 会因为 git 往 stderr 说话而中断，这里临时放宽
 $prevEap = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
-$cred = "protocol=https`nhost=github.com`n" | git credential fill 2>$null
+$cred = "protocol=https`nhost=github.com`n" | & $gitExe credential fill 2>$null
 $ErrorActionPreference = $prevEap
 $tok = ($cred | Select-String -Pattern '^password=(.+)$').Matches.Groups[1].Value
 if (-not $tok) { throw "未能从 Git 凭据管理器取到 GitHub token" }
@@ -202,12 +236,14 @@ $u = @{ versionCode = $VersionCode; versionName = $VersionName
 # EAP=Stop 下能把发版打断在半路（此时 Release 已经建好、APK 已经上传，
 # 只剩 update.json 没生效，状态很难看）。所以一律走 Exec。
 # 版本号那次提交在 ①b 已经推过了，这里只提交 update.json。
-Exec "git" @("add", "update.json") "git add" | Out-Null
+Exec $gitExe @("add", "update.json") "git add" | Out-Null
 CommitIfStaged "release: v$VersionName (versionCode $VersionCode)"
-if ($GitProxy) {
-    Exec "git" @("-c", "http.proxy=$GitProxy", "push", "origin", "main") "git push" | Out-Null
-} else {
-    Exec "git" @("push", "origin", "main") "git push" | Out-Null
-}
+$pushed = PushWithRetry $GitProxy
 
-Write-Host "`n✅ v$VersionName 发布完成。旧版 App 打开「检查更新」即可看到。" -ForegroundColor Green
+if ($pushed) {
+    Write-Host "`n✅ v$VersionName 发布完成。旧版 App 打开「检查更新」即可看到。" -ForegroundColor Green
+} else {
+    Write-Host "`n⚠ Release 和 APK 已就绪，但 update.json 没推上去，客户端还看不到新版本。" -ForegroundColor Red
+    Write-Host "  在能连 GitHub 的终端里补推一次即可（会连同版本号提交一起带上）：" -ForegroundColor Yellow
+    Write-Host "  git -c http.proxy=$GitProxy push origin main" -ForegroundColor Yellow
+}
