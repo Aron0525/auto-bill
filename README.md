@@ -141,7 +141,7 @@ AutoBill 常驻通知监听，把这类通知解析成结构化账单：
 
 ---
 
-## 测试：439 条断言
+## 测试：497 条断言
 
 项目没有用 JUnit / Espresso，而是**纯 JVM 自检**（`java` 直接跑，无 Android 依赖）：
 
@@ -150,7 +150,7 @@ bash selftest/run.sh          # 全部跑一遍，含编译
 bash selftest/run.sh Parser   # 只跑类名含 Parser 的
 ```
 
-脚本固定了编译范围、类名（多数自检在 `com.aron.autobill.selftest` 包下，直接写简名会 ClassNotFoundException）与统计口径，输出形如 `合计：通过 439 / 失败 0`，非零退出即代表有用例失败。
+脚本固定了编译范围、类名（多数自检在 `com.aron.autobill.selftest` 包下，直接写简名会 ClassNotFoundException）与统计口径，输出形如 `合计：通过 497 / 失败 0`，非零退出即代表有用例失败。
 
 | 自检 | 断言数 | 覆盖 |
 |---|---|---|
@@ -158,8 +158,9 @@ bash selftest/run.sh Parser   # 只跑类名含 Parser 的
 | `OcrSelftest` | 19 | OCR 文本行还原 |
 | `TemplateSelftest` | 31 | 5 个 App 的版式模板 |
 | `RealImageSelftest` | 11 | 真实截图端到端 |
-| `UpdateSelftest` | 45 | 更新协议、哈希、边界 |
-| `GithubUpdateSelftest` | 58 | GitHub 通道、断点续传 |
+| `UpdateSelftest` | 61 | 更新协议、哈希、魔数、取消、响应上限 |
+| `GithubUpdateSelftest` | 85 | GitHub 通道、地址归一、版本量纲、断点续传 |
+| `UpdateHttpSelftest` | 15 | 真 HTTP：200/206/416/302/404、服务器不认 Range |
 | `NotifPrecisionSelftest` | 37 | 通知解析精度 |
 | `ChannelPolicySelftest` | 30 | 渠道分流策略 |
 | `NotifPipelineSelftest` | 14 | 策略 → 解析器接缝、置信度门槛 |
@@ -167,9 +168,9 @@ bash selftest/run.sh Parser   # 只跑类名含 Parser 的
 | `ScreenPolicySelftest` | 27 | **浏览页 vs 结账页** |
 | `VisualSortSelftest` | 33 | 图表排序 |
 | 其余 | 42 | 分类、通知切割、多候选、模型基线 |
-| **合计** | **439** | **0 失败** |
+| **合计** | **497** | **0 失败** |
 
-**为什么不用标准测试框架**：解析器的核心逻辑是纯字符串处理，不需要 Android 运行时。纯 JVM 自检跑一次只要几秒，做一次改动能立刻验证全部 439 条，这个反馈速度是 Instrumentation 测试给不了的。
+**为什么不用标准测试框架**：解析器的核心逻辑是纯字符串处理，不需要 Android 运行时。纯 JVM 自检跑一次只要几秒，做一次改动能立刻验证全部 497 条，这个反馈速度是 Instrumentation 测试给不了的。
 
 ---
 

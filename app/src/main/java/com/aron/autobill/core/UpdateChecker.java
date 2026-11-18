@@ -698,12 +698,18 @@ public final class UpdateChecker {
         String target = canonicalTarget(url);
         String ownerRepo = normalizeOwnerRepo(target);
         if (ownerRepo != null) {
+            // timeoutMs 是**整次检查**的预算，不是每一次请求的预算。
+            // 静态通道要试 main / master，失败了再打 API，最坏三次请求。
+            // 每步都吃满超时的话，国内网络下 raw 被卡住时用户要干等 45 秒。
+            final long deadline = System.currentTimeMillis() + timeoutMs;
             // ① raw 静态 update.json：优先
             Exception rawError = null;
             UpdateInfo info = null;
             for (String branch : BRANCHES) {
+                int left = remaining(deadline);
+                if (left <= 0) break;
                 try {
-                    UpdateInfo i = fetchFromRaw(rawUpdateUrl(ownerRepo, branch), timeoutMs);
+                    UpdateInfo i = fetchFromRaw(rawUpdateUrl(ownerRepo, branch), left);
                     if (i != null && !i.apkUrl.isEmpty()) { info = i; break; }
                 } catch (Exception e) {
                     if (rawError == null) rawError = e;
@@ -713,7 +719,9 @@ public final class UpdateChecker {
 
             // ② Releases API：兜底
             try {
-                UpdateInfo gh = parseGithubRelease(fetch(githubApiUrl(ownerRepo), timeoutMs));
+                int left = remaining(deadline);
+                if (left <= 0) throw new IllegalStateException("检查更新超时（" + timeoutMs + "ms）");
+                UpdateInfo gh = parseGithubRelease(fetch(githubApiUrl(ownerRepo), left));
                 if (gh != null) return gh;
             } catch (Exception apiError) {
                 String m = String.valueOf(apiError.getMessage());
@@ -797,6 +805,13 @@ public final class UpdateChecker {
         if (owner.isEmpty() || repo.isEmpty()) return null;
         if (!owner.matches("[A-Za-z0-9._-]+") || !repo.matches("[A-Za-z0-9._-]+")) return null;
         return owner + "/" + repo;
+    }
+
+    /** 距离 deadline 还剩多少毫秒（至少给 1，避免 0 或负数当超时传下去） */
+    private static int remaining(long deadline) {
+        long left = deadline - System.currentTimeMillis();
+        if (left <= 0) return 0;
+        return (int) Math.min(Integer.MAX_VALUE, left);
     }
 
     /**

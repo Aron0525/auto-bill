@@ -73,8 +73,12 @@ $H = @{ Authorization = "Bearer $tok"; Accept = "application/vnd.github+json";
 
 # ---------- ② 建 Release ----------
 Step "② 创建 Release $tag"
+# body 里带两行给程序看的元数据（App 的 stripMetaLines 会把它们从更新说明里剔掉）：
+#   versionCode —— GitHub 没有这个字段，不写的话 App 只能从 tag 里抠第一段数字，
+#                  v2.3 抠出来是 2，跟真实的 12 不是一套编号，只能靠版本名比较。
+#   sha256      —— 让走 API 通道的客户端也能校验安装包。
 $body = @{ tag_name = $tag; name = $tag
-           body = if ($Notes) { "## 更新内容`n$Notes" } else { $tag }
+           body = "## 更新内容`n$Notes`n`nversionCode: $VersionCode`nsha256: $sha"
            draft = $false; prerelease = $false } | ConvertTo-Json
 try {
     $rel = Invoke-RestMethod -Method Post -Proxy $GitProxy -TimeoutSec 40 -Headers $H `
