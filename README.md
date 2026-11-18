@@ -93,6 +93,18 @@ AutoBill 常驻通知监听，把这类通知解析成结构化账单：
 
 常驻通知的文案会跟着状态变：`通知使用权未开启` → `监听未连接，正在尝试恢复` → `已接收 N 条交易通知`。付了钱但数字不动，当场就能发现，不用等一周才发现账本缺了一截。
 
+### 覆盖安装会把监听踢掉（HyperOS 实测）
+
+走系统安装器升级 APK（包括 App 内的「检查更新」），同签名同包名是**覆盖安装**，账本和设置都在，`firstInstallTime` 也不会变。但系统会把 `NotificationListenerService` 的绑定一并解除，而权限仍留在 Secure 设置里 —— 从设置里看是「已开启」，实际一条通知都收不到。
+
+更难受的是 `NotificationListenerService.requestRebind()` 在 HyperOS 上会被**收下但不执行**：调完没报错，绑定也不会恢复。唯一可靠的动作是在设置里把通知使用权**关一次再打开**（等价于 `adb shell cmd notification allow_listener <pkg>/<svc>`）。
+
+所以 App 的做法是：
+
+1. 每次回前台自检，未连接就尝试重绑（`MainActivity.healListener()`）
+2. 2.5 秒后复检，还是没连上就弹一次对话框，一键跳到通知使用权设置页，并说明要关一次再打开
+3. 用户从设置页回来，`onResume` 补刷常驻通知文案，状态立刻变得对得上
+
 ---
 
 ## 难点与解法
