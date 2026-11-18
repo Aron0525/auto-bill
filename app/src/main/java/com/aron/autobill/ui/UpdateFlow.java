@@ -139,20 +139,25 @@ public final class UpdateFlow {
                     }
                     Log.i(TAG, "检查到服务器版本: " + info);
                     int local = localCode(activity);
-                    if (info.versionCode == local) {
+                    String localNm = localName(activity);
+                    // compare 一次给出三种结论。不再先比 versionCode 是否相等：
+                    // GitHub 的 versionCode 是从 tag 猜的，跟本机 12 不是同一个量纲，
+                    // 相等判断会得出「已是最新」的假结论。
+                    int cmp = UpdateChecker.compare(local, localNm, info);
+                    if (cmp == 0) {
                         new MaterialAlertDialogBuilder(activity)
                                 .setTitle("已是最新版本")
-                                .setMessage("当前 " + localName(activity) + " (" + local + ") 就是服务器上的最新版本。")
+                                .setMessage("当前 " + localNm + " (" + local + ") 就是服务器上的最新版本。")
                                 .setPositiveButton("知道了", null)
                                 .show();
-                    } else if (UpdateChecker.hasNewer(local, info)) {
-                        offerDownload(activity, jsonUrl, info, local);
+                    } else if (cmp > 0) {
+                        offerDownload(activity, jsonUrl, info, local, localNm);
                     } else {
-                        // 服务器版本号比本机小 —— 多见于回滚服务器或地址填错
+                        // 服务器版本比本机小 —— 多见于回滚服务器或地址填错
                         new MaterialAlertDialogBuilder(activity)
                                 .setTitle("没有可用更新")
-                                .setMessage("服务器版本 " + info.versionName + " (" + info.versionCode
-                                        + ") 不高于当前版本 " + localName(activity) + " (" + local + ")。")
+                                .setMessage("服务器版本 " + label(info)
+                                        + " 不高于当前版本 " + localNm + " (" + local + ")。")
                                 .setPositiveButton("知道了", null)
                                 .show();
                     }
@@ -175,14 +180,25 @@ public final class UpdateFlow {
                 .show();
     }
 
+    /**
+     * 服务器版本的显示文案。
+     *
+     * tag 派生的 versionCode 只是「从 v2.3 里抠出来的第一个数字」，
+     * 跟本机 versionCode 不是一套编号，把它印在括号里会让人以为
+     * 新版本(2) 比当前(12) 还老。这种就不显示数字。
+     */
+    private static String label(UpdateChecker.UpdateInfo info) {
+        if (info.codeFromTag) return info.versionName.isEmpty() ? "未知" : info.versionName;
+        return info.versionName + " (" + info.versionCode + ")";
+    }
+
     // ==================== 有新版：确认下载 ====================
 
     private static void offerDownload(final Activity activity, final String jsonUrl,
-                                      final UpdateChecker.UpdateInfo info, int local) {
+                                      final UpdateChecker.UpdateInfo info, int local, String localNm) {
         StringBuilder msg = new StringBuilder();
-        msg.append("发现新版本：").append(info.versionName)
-           .append(" (").append(info.versionCode).append(")\n")
-           .append("当前版本：").append(localName(activity)).append(" (").append(local).append(")\n");
+        msg.append("发现新版本：").append(label(info)).append("\n")
+           .append("当前版本：").append(localNm).append(" (").append(local).append(")\n");
         if (!info.notes.isEmpty()) {
             msg.append("\n更新说明：\n").append(info.notes).append("\n");
         }
@@ -222,7 +238,10 @@ public final class UpdateFlow {
                 ? activity.getExternalFilesDir("update")
                 : activity.getFilesDir(), "");
         if (!dir.exists()) dir.mkdirs();
-        final File dest = new File(dir, "autobill-" + info.versionCode + ".apk");
+        // 文件名必须能区分版本：tag 派生的 versionCode 里 v2.3 和 v2.4 都是 2，
+        // 用数字命名会让两版共用 same.apk —— 断点续传把旧包当半截包续，
+        // 或者直接把上一版当这一版装上。
+        final File dest = new File(dir, "autobill-" + versionTagOf(info) + ".apk");
 
         // 进度对话框
         LinearLayout box = new LinearLayout(activity);
@@ -294,6 +313,17 @@ public final class UpdateFlow {
                 });
             }
         }, "update-download").start();
+    }
+
+    /**
+     * 下载文件名里的版本标识：优先 versionName（v2.3 / v2.4 分得开），
+     * 没有可用版本名时退回 versionCode。只留安全字符。
+     */
+    private static String versionTagOf(UpdateChecker.UpdateInfo info) {
+        String s = info.versionName == null ? "" : info.versionName.trim();
+        if (s.isEmpty()) s = String.valueOf(info.versionCode);
+        s = s.replaceAll("[^A-Za-z0-9._-]", "_");
+        return s.isEmpty() ? String.valueOf(info.versionCode) : s;
     }
 
     // ==================== 唤起系统安装器 ====================

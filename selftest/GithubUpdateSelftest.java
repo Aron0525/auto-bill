@@ -355,6 +355,60 @@ public class GithubUpdateSelftest {
         eq("norm_null_null", "null 安全", null,
                 UpdateChecker.normalizeOwnerRepo(null));
 
+        // ============================================================
+        // L. tag 派生的 versionCode 与本机 versionCode 不同量纲
+        // ============================================================
+        //
+        // 真实翻车：本机 12 / "2.2"，服务器 tag v2.3 且 body 里没写 versionCode。
+        // 旧逻辑拿 tag 抠出的 2 跟本机的 12 比 → 「服务器更旧」→ 永远升不上去。
+        // 修法：标 codeFromTag，改按版本名逐段比数字。
+        {
+            String v23 = "{\"tag_name\":\"v2.3\",\"body\":\"普通说明\","
+                    + "\"assets\":[{\"browser_download_url\":\"https://x.com/a.apk\"}]}";
+            String v22 = "{\"tag_name\":\"v2.2\",\"body\":\"普通说明\","
+                    + "\"assets\":[{\"browser_download_url\":\"https://x.com/a.apk\"}]}";
+            String v21 = "{\"tag_name\":\"v2.1\",\"body\":\"普通说明\","
+                    + "\"assets\":[{\"browser_download_url\":\"https://x.com/a.apk\"}]}";
+
+            UpdateChecker.UpdateInfo i23 = UpdateChecker.parseGithubRelease(v23);
+            UpdateChecker.UpdateInfo i22 = UpdateChecker.parseGithubRelease(v22);
+            UpdateChecker.UpdateInfo i21 = UpdateChecker.parseGithubRelease(v21);
+
+            ok("tag_flag", "tag 派生版本号被打上 codeFromTag",
+                    i23 != null && i23.codeFromTag, "没打标记");
+            ok("tag_newer_than_code", "本机 12/2.2 时 v2.3 → 有更新（旧逻辑判不出）",
+                    UpdateChecker.hasNewer(12, "2.2", i23), "判成没有更新");
+            eq("tag_same", "本机 12/2.2 时 v2.2 → 相同",
+                    UpdateChecker.compare(12, "2.2", i22), 0);
+            eq("tag_older", "本机 12/2.2 时 v2.1 → 更旧",
+                    UpdateChecker.compare(12, "2.2", i21), -1);
+
+            // 显式写了 versionCode 的 release 仍走整数比较，不受版本名干扰
+            UpdateChecker.UpdateInfo explicit = UpdateChecker.parseGithubRelease(RELEASE_JSON);
+            ok("explicit_not_tag", "body 有 versionCode 时不打 tag 标记",
+                    explicit != null && !explicit.codeFromTag, "被误标为 tag 派生");
+            ok("explicit_older", "显式 versionCode 10 对本机 12 → 无更新",
+                    !UpdateChecker.hasNewer(12, "2.2", explicit), "判成有更新");
+
+            // 拿不到本机版本名时退回整数比较（宁可漏提示，也不能给装不上的包）
+            ok("tag_no_local_name", "没有本机版本名 → 退回整数比较，2 < 12 判无更新",
+                    !UpdateChecker.hasNewer(12, null, i23), "判成有更新");
+        }
+
+        // 版本名比较本身
+        ok("cmp_2_10_vs_2_9", "2.10 比 2.9 新（不能按字符串比）",
+                UpdateChecker.compareVersionName("2.10", "2.9") > 0, "判成更旧");
+        ok("cmp_2_3_vs_2_2", "2.3 比 2.2 新",
+                UpdateChecker.compareVersionName("2.3", "2.2") > 0, "判成更旧");
+        eq("cmp_v_prefix", "版本名带 v 也认", 0,
+                UpdateChecker.compareVersionName("v2.2", "2.2"));
+        eq("cmp_pad", "2.2 与 2.2.0 相同（缺段按 0）", 0,
+                UpdateChecker.compareVersionName("2.2", "2.2.0"));
+        eq("cmp_invalid", "认不出数字 → MIN_VALUE（交给调用方退回整数比较）",
+                UpdateChecker.compareVersionName("latest", "2.2"), Integer.MIN_VALUE);
+        eq("cmp_null", "null 安全", Integer.MIN_VALUE,
+                UpdateChecker.compareVersionName(null, "2.2"));
+
         System.out.println();
         System.out.println("==== GitHub 更新自检: " + pass + " 通过 / " + fail + " 失败 ====");
         if (fail > 0) System.exit(1);

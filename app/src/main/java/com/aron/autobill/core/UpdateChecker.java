@@ -68,8 +68,18 @@ public final class UpdateChecker {
         public String notes = "";
         public boolean hasVersion;    // versionCode 字段是否存在且合法
 
+        /**
+         * versionCode 是从 tag 猜出来的（GitHub 没给显式声明）。
+         *
+         * 这种值不能直接跟 build.gradle 的 versionCode 比 ——
+         * 两者不同量纲：tag `v2.3` 抠出来是 2，而本机版本号是 12。
+         * 拿 2 跟 12 比，结论是「服务器更旧」，于是有新版也永远提示没更新。
+         * 标了这面旗子的，改用版本名逐段比较（见 compareVersionName）。
+         */
+        public boolean codeFromTag;
+
         @Override public String toString() {
-            return "v" + versionName + "(" + versionCode + ") url=" + apkUrl
+            return "v" + versionName + "(" + versionCode + (codeFromTag ? ",tag" : "") + ") url=" + apkUrl
                     + " sha256=" + (sha256.isEmpty() ? "(无)" : sha256.substring(0, Math.min(12, sha256.length())) + "…");
         }
     }
@@ -214,7 +224,74 @@ public final class UpdateChecker {
      * 严格大于：同版本号不算更新（防止服务器没动版本号时反复提示）。
      */
     public static boolean hasNewer(int localCode, UpdateInfo info) {
-        return info != null && info.hasVersion && info.versionCode > localCode;
+        return compare(localCode, null, info) > 0;
+    }
+
+    /** 同上，但能拿到本机 versionName —— tag 派生的版本号要靠它才比得准 */
+    public static boolean hasNewer(int localCode, String localName, UpdateInfo info) {
+        return compare(localCode, localName, info) > 0;
+    }
+
+    /**
+     * 服务器版本 vs 本机版本：1 = 服务器更新，0 = 相同，-1 = 服务器更旧或无法判断。
+     *
+     * 判断顺序有讲究：
+     *
+     *  · versionCode 是作者在 build.gradle 里写死的 → 直接比整数，最准。
+     *
+     *  · versionCode 是从 tag 猜的 → 先比 versionName（"2.3" vs "2.2" 逐段比数字），
+     *    因为 tag 规则（取第一段数字）和真实 versionCode 不在一个量纲上。
+     *    两个版本名都认不出数字时，才退回比整数 —— 这是最后的保守选择，
+     *    宁可不提示，也不要给一个装不上的包（系统会拒绝降级安装）。
+     *
+     * 真实翻车案例：本机 12 / "2.2"，服务器 tag v2.3、body 里没写 versionCode。
+     * 旧逻辑拿 2 跟 12 比 → 「没有可用更新」，用户永远升不上去。
+     */
+    public static int compare(int localCode, String localName, UpdateInfo info) {
+        if (info == null || !info.hasVersion) return -1;
+        if (info.codeFromTag) {
+            int c = compareVersionName(info.versionName, localName);
+            if (c != Integer.MIN_VALUE) return c;
+        }
+        if (info.versionCode > localCode) return 1;
+        return info.versionCode == localCode ? 0 : -1;
+    }
+
+    /**
+     * 版本名逐段比数字：remote 新 → 正数，相同 → 0，落后 → 负数，
+     * 任一侧不是「v?数字(.数字)*」→ Integer.MIN_VALUE（无法比较）。
+     *
+     * 逐段比而不是比字符串：字符串比会把 "2.10" 判成小于 "2.9"。
+     */
+    public static int compareVersionName(String remote, String local) {
+        int[] a = versionParts(remote);
+        int[] b = versionParts(local);
+        if (a == null || b == null) return Integer.MIN_VALUE;
+        int n = Math.max(a.length, b.length);
+        for (int i = 0; i < n; i++) {
+            int x = i < a.length ? a[i] : 0;
+            int y = i < b.length ? b[i] : 0;
+            if (x != y) return x > y ? 1 : -1;
+        }
+        return 0;
+    }
+
+    /** "v2.3.1" → {2,3,1}；不是纯版本号返回 null */
+    private static int[] versionParts(String s) {
+        if (s == null) return null;
+        String t = s.trim();
+        if (t.isEmpty() || !t.matches("[vV]?\\d+(\\.\\d+)*")) return null;
+        if (t.charAt(0) == 'v' || t.charAt(0) == 'V') t = t.substring(1);
+        String[] seg = t.split("\\.");
+        int[] out = new int[seg.length];
+        for (int i = 0; i < seg.length; i++) {
+            try {
+                out[i] = Integer.parseInt(seg[i]);
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return out;
     }
 
     /**
@@ -391,12 +468,17 @@ public final class UpdateChecker {
         // 如果写 <= 0 就会把它当解析失败，直接返回 null，更新永远不可用。
         // （这个 bug 是在拿真实 GitHub 响应测试时才发现的，合成数据里没有 v0.x 的 tag。）
         int code = parseCodeFromNotes(bodyStr);
-        if (code < 0 && tag != null) code = versionCodeFromTag(unescape(tag));
+        boolean fromTag = false;
+        if (code < 0 && tag != null) {
+            code = versionCodeFromTag(unescape(tag));
+            fromTag = true;      // 猜出来的，量纲和 build.gradle 的 versionCode 不同
+        }
         if (code < 0) return null;
 
         UpdateInfo info = new UpdateInfo();
         info.versionCode = code;
         info.hasVersion = true;
+        info.codeFromTag = fromTag;
 
         String tagStr = tag == null ? "" : unescape(tag).trim();
         // versionName 优先用 tag（去掉前导 v），没有就用 name
