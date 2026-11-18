@@ -8,12 +8,16 @@
 
     流程顺序是有讲究的（避免中间态 404，旧 App 拉到打不开的链接）：
         1. 改 build.gradle 版本号 → assembleDebug
-        2. 建 Release（tag = vX.Y）
-        3. 直连 uploads.github.com 上传 APK
+        2. 先把版本号那笔提交推上去
+           —— GitHub 建 Release 时在**当时的远端 HEAD** 上打 tag，
+              版本号没提交就建 Release，vX.Y 会指向上一版源码，
+              checkout 出来构建还是旧 versionCode。
+        3. 建 Release（tag = vX.Y）
+        4. 直连 uploads.github.com 上传 APK
            —— 实测走代理上传会卡在 state=starter（响应 408，字节没传完），
               uploads.github.com 在本机可直连，所以这里强制直连。
-        4. 下载直链回来算 sha256，与本地比对 —— 确认外部真的拿得到包
-        5. 最后一步才写 update.json 并 push
+        5. 下载直链回来算 sha256，与本地比对 —— 确认外部真的拿得到包
+        6. 最后一步才写 update.json 并 push
            —— raw.githubusercontent.com 上的这份文件一旦被旧 App 读到，
               就会触发下载，所以它必须晚于 Release 生效。
 
@@ -74,6 +78,24 @@ function Exec([string]$exe, [string[]]$argv, [string]$label) {
     return $out
 }
 
+# 有暂存内容才提交。发版中途失败后重跑时，版本号那一提交已经存在，
+# 无条件 commit 会因为 "nothing to commit" 直接抛，把重试路堵死。
+function CommitIfStaged([string]$msg) {
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $null = & git diff --cached --quiet 2>&1
+        $staged = ($LASTEXITCODE -ne 0)
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    if ($staged) {
+        Exec "git" @("commit", "-m", $msg) "git commit" | Out-Null
+    } else {
+        Write-Host "没有待提交的改动，跳过提交（$msg）"
+    }
+}
+
 # ---------- ① 版本号 + 构建 ----------
 Step "① 构建 v$VersionName (versionCode $VersionCode)"
 Set-Location $root
@@ -94,6 +116,24 @@ $sha = (Get-FileHash $apk -Algorithm SHA256).Hash
 $size = (Get-Item $apk).Length
 Write-Host "APK: $([math]::Round($size/1MB,2)) MB"
 Write-Host "SHA256: $sha"
+
+# ---------- ①b 先把版本号提交推上去，再建 Release ----------
+#
+# 顺序很关键。GitHub 建 Release 时会**在当时的远端 HEAD 上打 tag**，
+# 而版本号改动还没提交时 HEAD 指向的是上一次的提交 —— 于是 v2.3 这个 tag
+# 指向一棵 versionCode 还是 12 的树，checkout 出来构建得到旧版本号。
+# 第一次发 v2.3 就是这么错位的，事后只能 force push 把 tag 挪正。
+#
+# 这一步先推 build.gradle 的改动，此时 update.json 还没动，客户端拉到的仍是
+# 上一版信息，不会出现「指向还没上传的 APK」的 404 窗口。
+Step "①b 提交版本号（让 tag 落在正确的提交上）"
+Exec "git" @("add", "build.gradle", "app/build.gradle") "git add" | Out-Null
+CommitIfStaged "chore(release): 版本号升到 v$VersionName (versionCode $VersionCode)"
+if ($GitProxy) {
+    Exec "git" @("-c", "http.proxy=$GitProxy", "push", "origin", "main") "git push" | Out-Null
+} else {
+    Exec "git" @("push", "origin", "main") "git push" | Out-Null
+}
 
 # ---------- token ----------
 # 取凭据时 EAP=Stop 会因为 git 往 stderr 说话而中断，这里临时放宽
@@ -161,8 +201,9 @@ $u = @{ versionCode = $VersionCode; versionName = $VersionName
 # git 在 add 时会往 stderr 打 "LF will be replaced by CRLF" 之类警告，
 # EAP=Stop 下能把发版打断在半路（此时 Release 已经建好、APK 已经上传，
 # 只剩 update.json 没生效，状态很难看）。所以一律走 Exec。
-Exec "git" @("add", "build.gradle", "app/build.gradle", "update.json") "git add" | Out-Null
-Exec "git" @("commit", "-m", "release: v$VersionName (versionCode $VersionCode)") "git commit" | Out-Null
+# 版本号那次提交在 ①b 已经推过了，这里只提交 update.json。
+Exec "git" @("add", "update.json") "git add" | Out-Null
+CommitIfStaged "release: v$VersionName (versionCode $VersionCode)"
 if ($GitProxy) {
     Exec "git" @("-c", "http.proxy=$GitProxy", "push", "origin", "main") "git push" | Out-Null
 } else {
