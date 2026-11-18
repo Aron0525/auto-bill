@@ -71,6 +71,11 @@ public class MainActivity extends AppCompatActivity {
     /** 报表选中年份（默认当前年） */
     private int selectedYear = Calendar.getInstance().get(Calendar.YEAR);
 
+    /** 监听自愈：是否已排了一次延迟复检，避免每次 onResume 叠一堆任务 */
+    private boolean healCheckScheduled;
+    /** 监听自愈：本次会话是否已弹过「去设置」提示 */
+    private boolean rebindPrompted;
+
     private final BroadcastReceiver refreshReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             reload();
@@ -100,6 +105,36 @@ public class MainActivity extends AppCompatActivity {
         Log.i("AutoBill", "回到前台：监听未连接，尝试重绑");
         com.aron.autobill.core.NotifBinder.rebind(this, BillNotificationListener.class);
         KeepAliveService.start(this);
+        // requestRebind 在 HyperOS 上经常被忽略：系统收下了请求却不重建绑定。
+        // 等一会儿再确认一次，还是没连上就明确告诉用户去开关一次通知使用权——
+        // 这是系统层面唯一可靠的动作，App 自己做不到。
+        if (healCheckScheduled) return;
+        healCheckScheduled = true;
+        contentHome.postDelayed(new Runnable() {
+            @Override public void run() {
+                healCheckScheduled = false;
+                if (com.aron.autobill.core.NotifLog.started()) return;
+                if (isFinishing() || isDestroyed()) return;
+                promptRebindManually();
+            }
+        }, 2500);
+    }
+
+    /** 只在一次会话里弹一次，用户来回切页面不该被反复打断。 */
+    private void promptRebindManually() {
+        if (rebindPrompted || isFinishing() || isDestroyed()) return;
+        rebindPrompted = true;
+        new AlertDialog.Builder(this)
+                .setTitle("通知监听被系统断开了")
+                .setMessage("安卓没有把监听服务重新接上，这段时间的支付不会自动记账。\n\n"
+                        + "请到设置里把「自动记账」的通知使用权关一次再打开，服务会立刻恢复。")
+                .setPositiveButton("去设置", new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface d, int w) {
+                        startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
+                    }
+                })
+                .setNegativeButton("稍后", null)
+                .show();
     }
 
     @Override
