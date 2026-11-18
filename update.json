@@ -1,7 +1,7 @@
 {
-    "apkUrl":  "https://github.com/Aron0525/auto-bill/releases/download/v2.3/autobill-v2.3.apk",
-    "sha256":  "F7FECD20519109E08BC1116163931991904ACAD8F79E81137B7499EBBF2C3796",
-    "versionCode":  13,
-    "versionName":  "2.3",
-    "notes":  "修复检查更新\n- 相对 apkUrl 不再拼成没有 scheme 的废地址\n- GitHub tag 推出的版本号不再跟 versionCode 硬比，不再出现「有新版却说没更新」\n- 仓库链接、releases 页、api.github.com 地址都能直接填，统一先走不限流的静态通道\n- 下载到的不是安装包会在安装前拦住，不再到系统安装器才报「解析包时出现错误」\n- 断点续传遇到 416 自动清残包重下，取消下载真的会停\n- 检查更新有 15 秒总预算，不再干等 45 秒"
+    "apkUrl": "https://github.com/Aron0525/auto-bill/releases/download/v2.4.0/autobill-v2.4.0.apk",
+    "sha256": "1725A24E50DA74D9FA0B0BC30DD570DD134CCE24468F9A5D61D1BA7559013AF2",
+    "versionCode": 14,
+    "versionName": "2.4.0",
+    "notes": "覆盖安装会把通知监听的绑定解掉，权限还在却一条通知都收不到，这是之前「不能自动记账」的根因。\n- 回到前台自动重绑，不再静默失效\n- HyperOS 忽略重绑请求时弹出一次引导，一键跳到通知使用权页，说明要关一次再打开\n- 从设置页回来后立刻刷新常驻通知状态，不再停在旧文案上"
 }
