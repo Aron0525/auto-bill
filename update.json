@@ -1,0 +1,7 @@
+{
+  "versionCode": 11,
+  "versionName": "2.1",
+  "apkUrl": "https://github.com/Aron0525/auto-bill/releases/download/v2.1/autobill-v2.1.apk",
+  "sha256": "D1C2937976F5BEDA87C2E6CB107DE39F6A101468706E895F0C75F921259DBEA2",
+  "notes": "更新支持 GitHub Releases\n下载支持断点续传\n修复真实 GitHub 响应解析爆栈、v0.x 版本号误判"
+}
