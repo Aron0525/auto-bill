@@ -1,7 +1,7 @@
 {
-  "versionCode": 12,
-  "versionName": "2.2",
-  "apkUrl": "https://github.com/Aron0525/auto-bill/releases/download/v2.2/autobill-v2.2.apk",
-  "sha256": "E4EC5F427CB62ACDCF9D8B04102AAE44F579F2E45336D854C98FD19990519C32",
-  "notes": "更新改走 GitHub 静态通道，不再受 API 限流（403）影响\n恢复并加固下载断点续传\n修复大响应解析爆栈导致的检查更新失败"
+    "apkUrl":  "https://github.com/Aron0525/auto-bill/releases/download/v2.3/autobill-v2.3.apk",
+    "sha256":  "F7FECD20519109E08BC1116163931991904ACAD8F79E81137B7499EBBF2C3796",
+    "versionCode":  13,
+    "versionName":  "2.3",
+    "notes":  "修复检查更新\n- 相对 apkUrl 不再拼成没有 scheme 的废地址\n- GitHub tag 推出的版本号不再跟 versionCode 硬比，不再出现「有新版却说没更新」\n- 仓库链接、releases 页、api.github.com 地址都能直接填，统一先走不限流的静态通道\n- 下载到的不是安装包会在安装前拦住，不再到系统安装器才报「解析包时出现错误」\n- 断点续传遇到 416 自动清残包重下，取消下载真的会停\n- 检查更新有 15 秒总预算，不再干等 45 秒"
 }
