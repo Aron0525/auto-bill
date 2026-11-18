@@ -202,7 +202,7 @@ Write-Host "Release id=$($rel.id)"
 # ---------- ③ 上传 APK（直连，代理会卡 starter）----------
 Step "③ 上传 APK（直连 uploads.github.com）"
 $tmp = Join-Path $env:TEMP "asset.json"
-Exec "curl.exe" @("-sS", "--connect-timeout", "20", "--max-time", "600",
+Exec "curl.exe" @("-sS", "--connect-timeout", "20", "--max-time", "1800",
     "-H", "Authorization: Bearer $tok",
     "-H", "Content-Type: application/vnd.android.package-archive",
     "--data-binary", "@$apk",
@@ -215,13 +215,28 @@ if ($a.state -ne "uploaded") {
 }
 Write-Host "state=uploaded id=$($a.id)"
 
-# ---------- ④ 回读直链校验 ----------
-Step "④ 校验外部可下载 + 哈希一致"
+# ---------- ④ 校验哈希 ----------
+#
+# 优先用 GitHub 服务端给资产算的 digest：上传成功时就有，比对一下即可，
+# 不用再把 47MB 拉回来一遍。本机到 objects.githubusercontent.com 经常只有
+# 几十 KB/s，硬下 47MB 既慢又容易半路断，把发版拖死在一个纯校验步骤上。
+# 老账号 / 老 API 不返回 digest 时退回下载校验。
+Step "④ 校验哈希"
 $dlUrl = "https://github.com/$Repo/releases/download/$tag/$assetName"
-$r = Invoke-WebRequest -Uri $dlUrl -Proxy $GitProxy -UseBasicParsing -TimeoutSec 300
-$remote = (Get-FileHash -InputStream ([System.IO.MemoryStream]::new($r.Content)) -Algorithm SHA256).Hash
-if ($remote -ne $sha) { throw "远端哈希不一致：$remote ≠ $sha" }
-Write-Host "直链可用，哈希一致 ✔"
+$ok = $false
+if ($a.digest) {
+    $server = ($a.digest -replace '^sha256:', '').ToUpper()
+    if ($server -ne $sha) { throw "服务端 digest 与本地不一致：$server ≠ $sha" }
+    Write-Host "服务端 digest 一致 ✔（未下载整包）"
+    $ok = $true
+}
+if (-not $ok) {
+    Write-Host "接口未返回 digest，回读整包校验…"
+    $r = Invoke-WebRequest -Uri $dlUrl -Proxy $GitProxy -UseBasicParsing -TimeoutSec 600
+    $remote = (Get-FileHash -InputStream ([System.IO.MemoryStream]::new($r.Content)) -Algorithm SHA256).Hash
+    if ($remote -ne $sha) { throw "远端哈希不一致：$remote ≠ $sha" }
+    Write-Host "直链可用，哈希一致 ✔"
+}
 
 # ---------- ⑤ 最后才发布 update.json ----------
 Step "⑤ 写 update.json 并推送（更新此刻对外生效）"
