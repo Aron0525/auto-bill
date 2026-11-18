@@ -157,10 +157,6 @@ public class BillNotificationListener extends NotificationListenerService {
         }
     }
 
-    private void handle(StatusBarNotification sbn) {
-        handle(sbn, 0L);
-    }
-
     /**
      * @param eventTs 交易发生时间。0 = 用当前时间（实时通知）；
      *                断线补捞时传通知自己的 postTime，账目才不会被记到补捞那一刻。
