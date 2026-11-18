@@ -57,6 +57,33 @@ public class BillNotificationListener extends NotificationListenerService {
         store = new BillStore(this);
         parser = new com.aron.autobill.core.BillParser();
         Log.i(TAG, "通知监听已连接，开始监听交易通知");
+
+        // 「服务在岗」的登记。保活服务的 5 分钟自检靠它判断要不要重绑，
+        // 主页状态行靠它判断该显示「监听中」还是「未连接」。
+        com.aron.autobill.core.NotifLog.markStart(System.currentTimeMillis());
+
+        // 系统把监听绑上了，说明授权链路是通的 —— 顺手把保活服务也拉起来
+        // （它可能刚被 MIUI 清掉）。幂等，重复调用无副作用。
+        KeepAliveService.start(this);
+        KeepAliveService.refresh(this);
+    }
+
+    /**
+     * 被系统解绑（权限被撤销、或 MIUI 回收了进程）。
+     *
+     * 这里必须主动请求重绑：实测 HyperOS 上解绑后系统不会自己接回来，
+     * 而用户那边只表现为「付了钱但没记账」，没有任何可见异常。
+     */
+    @Override
+    public void onListenerDisconnected() {
+        super.onListenerDisconnected();
+        Log.w(TAG, "通知监听已断开 —— 请求系统重新绑定");
+        try {
+            com.aron.autobill.core.NotifBinder.rebind(this, BillNotificationListener.class);
+        } catch (Throwable ignored) {}
+        try {
+            KeepAliveService.refresh(this);   // 常驻通知立刻变成「监听未连接」
+        } catch (Throwable ignored) {}
     }
 
     @Override

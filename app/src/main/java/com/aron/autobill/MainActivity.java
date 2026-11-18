@@ -112,6 +112,9 @@ public class MainActivity extends AppCompatActivity {
         IntentFilter f = new IntentFilter("com.aron.autobill.BILL_ADDED");
         registerReceiver(refreshReceiver, f, Context.RECEIVER_NOT_EXPORTED);
         ensureNotificationPermission();
+        // 每次打开 App 都确保保活服务在岗：MIUI 上服务被清后不会自愈，
+        // 这是最便宜的一次补救（幂等，重复调用无副作用）。
+        KeepAliveService.start(this);
         reload();
         showPage(true);
     }

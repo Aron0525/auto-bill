@@ -37,6 +37,10 @@ public class SettingsActivity extends AppCompatActivity {
 
         swAuto.setOnCheckedChangeListener((buttonView, isChecked) -> {
             Prefs.setAutoEnabled(this, isChecked);
+            // 开关不只是个标记：关掉就把常驻服务停掉，打开就拉回来，
+            // 否则用户以为关了，通知栏还挂着一条「自动记账运行中」。
+            if (isChecked) KeepAliveService.start(this);
+            else KeepAliveService.stop(this);
             Toast.makeText(this, isChecked ? "自动记账已开启" : "自动记账已关闭",
                     Toast.LENGTH_SHORT).show();
         });
@@ -131,22 +135,11 @@ public class SettingsActivity extends AppCompatActivity {
 
     /**
      * 通知使用权（NotificationListener）检测。
-     * 与无障碍不同，它没有 API 能直接查本应用是否在列表里，
-     * 只能读 Settings.Secure 的 ENABLED_NOTIFICATION_LISTENERS。
+     * 判定逻辑收在 NotifBinder.enabled —— 主页状态行与保活通知也用同一份，
+     * 三处各写一遍迟早会不一致（一个说已开启、另一个说没有）。
      */
     private boolean isNotificationAccessGranted() {
-        try {
-            String flat = Settings.Secure.getString(getContentResolver(),
-                    "enabled_notification_listeners");
-            if (flat == null || flat.isEmpty()) return false;
-            String me = getPackageName() + "/" + BillNotificationListener.class.getName();
-            for (String s : flat.split(":")) {
-                if (s.equalsIgnoreCase(me)) return true;
-                // 部分 ROM 只写包名
-                if (s.startsWith(getPackageName() + "/")) return true;
-            }
-        } catch (Throwable ignored) {}
-        return false;
+        return com.aron.autobill.core.NotifBinder.enabled(this);
     }
 
     private void openNotificationAccess() {
