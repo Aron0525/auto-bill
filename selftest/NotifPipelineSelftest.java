@@ -175,6 +175,20 @@ public class NotifPipelineSelftest {
                         false, false, null),
                 4500L, new String[]{"肯德基"}, null, 100);
 
+        // ---- 13. 群聊转账必须落不到账本 ----
+        // 真机翻车记录：策略把上限压到 50，而 BillProcessor 的门槛判的是
+        // 「置信度 < 50」，50 不小于 50 —— 群里「张三: 已转账 200.00元」
+        // 照样写进账本（只是多了个待确认标记），与「宁可漏不可错」正好相反。
+        // 现在上限统一取 NotifPolicy.MAX_LOW_CONF，必须严格低于门槛。
+        ParseResult chat = run(WX, CH_WX, "工作群", "张三: 已转账 200.00元",
+                false, false, "工作群");
+        boolean chatOk = chat != null && chat.ok
+                && chat.confidence < NotifPolicy.CONF_AUTO;
+        report("chat_below_gate", "群聊转账置信度必须低于入账门槛（" + NotifPolicy.CONF_AUTO + "）",
+                chatOk,
+                chat == null ? "未解析" : "conf=" + chat.confidence
+                        + " 门槛=" + NotifPolicy.CONF_AUTO);
+
         System.out.println();
         System.out.println("==== 通知链路端到端: " + pass + " 通过 / " + fail + " 失败 ====");
         if (fail > 0) System.exit(1);

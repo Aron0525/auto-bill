@@ -48,6 +48,18 @@ public final class NotifPolicy {
     /** 有交易发生，但金额不在通知里（转账卡片）—— 提示用户去 App 看 */
     public static final int PLACEHOLDER = 3;
 
+    /**
+     * 入账门槛：低于它不进账本，进待确认队列。
+     *
+     * 这个常量放在策略层，是因为「LOW 要把置信度压到门槛之下」和
+     * 「门槛是多少」必须来自同一个数 —— 分开写就必然出现 off-by-one
+     * （压到 50、门槛判 < 50，结果 50 照样入账）。
+     * BillProcessor.CONF_AUTO 直接引用这里。
+     */
+    public static final int CONF_AUTO = 50;
+    /** LOW verdict 的置信度上限：必须严格小于门槛 */
+    public static final int MAX_LOW_CONF = CONF_AUTO - 1;
+
     public static final class Decision {
         public int verdict = PARSE;
         /** 人类可读的原因，写进日志便于排查 */
@@ -148,7 +160,12 @@ public final class NotifPolicy {
             // 只要不是 SKIP/PLACEHOLDER，聊天会话一律压到 CONF_AUTO 以下。
             if (d.verdict == PARSE || d.verdict == LOW) {
                 String why = isChat ? ("聊天会话(" + conv + ")") : "疑似聊天消息";
-                d = new Decision(LOW, why).cap(50).noTitleMerchant();
+                // 上限必须是 49 而不是 50。
+                // BillProcessor 的入账门槛是「置信度 < 50 → 进待确认队列」，
+                // 压到 50 时 50 不小于 50，照样直接入账。
+                // 真机翻车记录：群里「张三: 已转账 200.00元」被压到 50 后
+                // 依然写进账本，只是多了个「待确认」标记 —— 与设计意图相反。
+                d = new Decision(LOW, why).cap(MAX_LOW_CONF).noTitleMerchant();
             }
         }
 

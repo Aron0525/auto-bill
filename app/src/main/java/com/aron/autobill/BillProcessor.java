@@ -29,8 +29,13 @@ public final class BillProcessor {
 
     private static final String TAG = "AutoBillProc";
 
-    /** 入账硬门槛：低于它不入账，但会进待确认队列 */
-    public static final int CONF_AUTO = 50;
+    /**
+     * 入账硬门槛：低于它不入账，但会进待确认队列。
+     *
+     * 数值取自 NotifPolicy —— 策略层要把低可信通知压到「门槛之下」，
+     * 两边各写一个 50 就会差一（压到 50、判断 < 50，结果照样入账）。
+     */
+    public static final int CONF_AUTO = com.aron.autobill.core.NotifPolicy.CONF_AUTO;
     /** 高置信度：直接入账且无需用户复核 */
     public static final int CONF_CERTAIN = 80;
     /** 语义去重窗口：同一笔跨通道（通知→屏幕→短信）合并 */
