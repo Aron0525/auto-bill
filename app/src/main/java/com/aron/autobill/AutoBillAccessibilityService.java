@@ -36,8 +36,6 @@ import java.util.Set;
 public class AutoBillAccessibilityService extends AccessibilityService {
     private static final String TAG = "AutoBill";
 
-    /** 记账提醒渠道（heads-up 需要 IMPORTANCE_HIGH） */
-    private static final String CHANNEL_BILL = "autobill_bill";
     /** 语义去重时间窗：5 分钟 */
     private static final long DEDUP_WINDOW_MS = 5 * 60 * 1000L;
     /** 内存指纹窗口：同一条通知文本在 30 分钟内不再重复解析 */
@@ -102,17 +100,12 @@ public class AutoBillAccessibilityService extends AccessibilityService {
         Log.i(TAG, "无障碍服务已连接，开始监听交易");
     }
 
-    /** 创建「记账提醒」通知渠道（Android 8+；HIGH 才能顶部横幅） */
+    /** 渠道统一由 Ensure 建，别在这里另建一份：同 ID 两处写法不同会让属性打架 */
     private void ensureBillChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             try {
                 NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-                NotificationChannel ch = new NotificationChannel(CHANNEL_BILL, "记账提醒",
-                        NotificationManager.IMPORTANCE_HIGH);
-                ch.setDescription("每记一笔账，在屏幕顶部提示这笔的详细信息");
-                ch.enableLights(false);
-                ch.enableVibration(false);
-                nm.createNotificationChannel(ch);
+                Ensure.channel(this, nm);
             } catch (Throwable t) {
                 Log.w(TAG, "创建通知渠道失败: " + t);
             }
@@ -490,11 +483,8 @@ public class AutoBillAccessibilityService extends AccessibilityService {
             big.append(" · ").append(formatTime(bill.ts)).append('\n');
             big.append("识别度 ").append(bill.confidence).append("% · 已记入账本");
 
-            Notification.Builder b;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                b = new Notification.Builder(this, CHANNEL_BILL);
-            } else {
-                b = new Notification.Builder(this);
+            Notification.Builder b = Ensure.builder(this);
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
                 b.setPriority(Notification.PRIORITY_HIGH);
             }
             b.setSmallIcon(R.drawable.ic_notify_bill)

@@ -231,12 +231,17 @@ public final class BillProcessor {
                             | android.app.PendingIntent.FLAG_IMMUTABLE);
 
             String dir = r.type == 2 ? "收入" : "支出";
+            String detail = String.format("%s ¥%.2f",
+                    r.merchant == null || r.merchant.isEmpty() ? "未识别商户" : r.merchant,
+                    r.amountFen / 100.0);
             android.app.Notification.Builder b = Ensure.builder(ctx)
                     .setSmallIcon(R.drawable.ic_launcher)
-                    .setContentTitle("发现一笔疑似" + dir + "，待确认")
-                    .setContentText(String.format("%s ¥%.2f", 
-                            r.merchant == null || r.merchant.isEmpty() ? "未识别商户" : r.merchant,
-                            r.amountFen / 100.0))
+                    .setContentTitle("疑似" + dir + "，待确认")
+                    .setContentText(detail)
+                    .setStyle(new android.app.Notification.BigTextStyle().bigText(detail))
+                    .setCategory(android.app.Notification.CATEGORY_MESSAGE)
+                    .setPriority(android.app.Notification.PRIORITY_HIGH)
+                    .setVisibility(android.app.Notification.VISIBILITY_PUBLIC)
                     .setContentIntent(pi)
                     .setAutoCancel(true);
             nm.notify(Ensure.PENDING_ID, b.build());
@@ -254,10 +259,11 @@ public final class BillProcessor {
             Ensure.channel(ctx, nm);
 
             String dir = bill.type == 2 ? "收入" : "支出";
-            String title = pending ? "已记账（待确认）" : "已记账";
-            String body = String.format("%s ¥%.2f  %s%s", dir, bill.amountFen / 100.0,
-                    bill.merchant == null || bill.merchant.isEmpty() ? "未识别商户" : bill.merchant,
-                    category == null || category.isEmpty() ? "" : " · " + category);
+            String amount = String.format("¥%.2f", bill.amountFen / 100.0);
+            // 金额放进标题：横幅只露一两行，商户名可以点开看，金额必须第一眼看到。
+            String title = (pending ? "待确认 · " : "已记账 · ") + dir + " " + amount;
+            String body = (bill.merchant == null || bill.merchant.isEmpty() ? "未识别商户" : bill.merchant)
+                    + (category == null || category.isEmpty() ? "" : " · " + category);
 
             Intent open = new Intent(ctx, MainActivity.class);
             open.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
@@ -270,6 +276,12 @@ public final class BillProcessor {
                     .setSmallIcon(R.drawable.ic_launcher)
                     .setContentTitle(title)
                     .setContentText(body)
+                    .setStyle(new android.app.Notification.BigTextStyle().bigText(body))
+                    // CATEGORY_MESSAGE 是「有人给你发消息」的语义，MIUI 对这类通知才给横幅样式；
+                    // 默认的 CATEGORY 在部分版本会被折叠进通知栏，只在状态栏闪一下图标。
+                    .setCategory(android.app.Notification.CATEGORY_MESSAGE)
+                    .setPriority(android.app.Notification.PRIORITY_HIGH)
+                    .setVisibility(android.app.Notification.VISIBILITY_PUBLIC)
                     .setContentIntent(pi)
                     .setAutoCancel(true);
             nm.notify(Ensure.BILL_ID, b.build());
