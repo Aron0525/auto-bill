@@ -315,10 +315,19 @@ public class SettingsActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        boolean enabled = isAccessibilityEnabled();
-        tvA11y.setText(enabled ? "无障碍服务：已开启 ✓" : "无障碍服务：未开启 ✗  点此前往开启");
+        // 无障碍三态：跑着 / 设置里开着但服务已掉线 / 完全没开。
+        // 中间那种是 MIUI 上最常见的，旧版会显示成「已开启」，把人骗过去。
+        boolean a11yRunning = HealthCheck.a11yEnabled(this);
+        boolean a11ySetOn = HealthCheck.a11ySettingOn(this);
+        if (a11yRunning) {
+            tvA11y.setText("无障碍服务：已开启 ✓");
+        } else if (a11ySetOn) {
+            tvA11y.setText("无障碍服务：已掉线 ⚠  设置里开着但服务没在跑，点此关掉再打开一次");
+        } else {
+            tvA11y.setText("无障碍服务：未开启 ✗  点此前往开启");
+        }
         tvA11y.setTextColor(ContextCompat.getColor(this,
-                enabled ? R.color.income : R.color.expense));
+                a11yRunning ? R.color.income : R.color.expense));
         refreshPendingBadge();
         refreshNotifAccess();
         refreshAppsHint();
@@ -340,12 +349,6 @@ public class SettingsActivity extends AppCompatActivity {
         tv.setText(cautious + " 个需结账凭证， " + off + " 个不读屏"
                 + (custom > 0 ? "（" + custom + " 项自定义）" : "")
                 + "；刷商品被误记就关掉它");
-    }
-
-    private boolean isAccessibilityEnabled() {
-        String enabled = Settings.Secure.getString(
-                getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
-        return enabled != null && enabled.contains(getPackageName());
     }
 
     @Override

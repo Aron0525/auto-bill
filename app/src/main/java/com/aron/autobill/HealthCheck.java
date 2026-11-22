@@ -48,6 +48,29 @@ public final class HealthCheck {
         return false;
     }
 
+    /**
+     * 无障碍是否还留在系统设置里。
+     *
+     * 这和 a11yEnabled() 不是一回事。MIUI 会把这个服务从「已启用列表」里摘掉，
+     * 但 Settings.Secure 里那一串还写着它，于是只看设置就显示「已开启 ✓」，
+     * 实际早就读不到屏幕了——用户以为在用，其实一条都没记上。
+     */
+    public static boolean a11ySettingOn(Context c) {
+        try {
+            String v = android.provider.Settings.Secure.getString(
+                    c.getContentResolver(),
+                    android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+            return v != null && v.contains(c.getPackageName() + "/");
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** 设置里开着、系统却不认——就是「无障碍掉线」的现场 */
+    public static boolean a11yDropped(Context c) {
+        return a11ySettingOn(c) && !a11yEnabled(c);
+    }
+
     /** 是否已在电池优化白名单里（MIUI 的「省电策略：无限制」通常也落在这里） */
     public static boolean batteryUnrestricted(Context c) {
         try {
@@ -83,6 +106,7 @@ public final class HealthCheck {
     public static String summary(Context c) {
         if (!notifGranted(c)) return "通知使用权未开启";
         if (!notifConnected()) return "通知监听未连接";
+        if (a11yDropped(c)) return "无障碍服务已掉线";
         if (!a11yEnabled(c)) return "无障碍服务未开启";
         if (standbyRestricted(c)) return "后台被系统限制";
         return "采集链路正常";

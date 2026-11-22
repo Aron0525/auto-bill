@@ -358,12 +358,21 @@ public class MainActivity extends AppCompatActivity {
         statusBox.addView(notifLine);
 
         TextView status = new TextView(this);
-        boolean enabled = isAccessibilityEnabled();
-        status.setText(enabled ? "无障碍服务已开启 ✓" : "无障碍服务未开启 ✗  点此开启（截图补记用）");
+        // 三态，不是两态。只看 Settings.Secure 那一串会在服务被杀之后继续显示「已开启」，
+        // 用户就以为读屏还在工作。真正的「在跑」以系统已启用列表为准。
+        boolean a11yRunning = HealthCheck.a11yEnabled(this);
+        boolean a11ySetOn = HealthCheck.a11ySettingOn(this);
+        if (a11yRunning) {
+            status.setText("无障碍服务已开启 ✓");
+        } else if (a11ySetOn) {
+            status.setText("无障碍已掉线 ⚠  设置里还开着，服务没在跑，点此重开一次");
+        } else {
+            status.setText("无障碍服务未开启 ✗  点此开启（截图补记用）");
+        }
         status.setTextSize(11);
-        status.setTextColor(col(enabled ? R.color.ink_sub : R.color.expense));
+        status.setTextColor(col(a11yRunning ? R.color.ink_sub : R.color.expense));
         status.setPadding(0, dp(3), 0, 0);
-        if (!enabled) {
+        if (!a11yRunning) {
             status.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View v) {
                     startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
@@ -1221,12 +1230,6 @@ public class MainActivity extends AppCompatActivity {
 
     private int col(int resId) {
         return ContextCompat.getColor(this, resId);
-    }
-
-    private boolean isAccessibilityEnabled() {
-        String enabled = Settings.Secure.getString(
-                getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
-        return enabled != null && enabled.contains(getPackageName());
     }
 
     /** 状态行用的短时间：今天只显示 HH:mm，跨天补上日期 */
