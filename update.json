@@ -1,7 +1,7 @@
 {
-    "apkUrl": "https://github.com/Aron0525/auto-bill/releases/download/v2.4.0/autobill-v2.4.0.apk",
-    "sha256": "1725A24E50DA74D9FA0B0BC30DD570DD134CCE24468F9A5D61D1BA7559013AF2",
-    "versionCode": 14,
-    "versionName": "2.4.0",
-    "notes": "覆盖安装会把通知监听的绑定解掉，权限还在却一条通知都收不到，这是之前「不能自动记账」的根因。\n- 回到前台自动重绑，不再静默失效\n- HyperOS 忽略重绑请求时弹出一次引导，一键跳到通知使用权页，说明要关一次再打开\n- 从设置页回来后立刻刷新常驻通知状态，不再停在旧文案上"
+    "apkUrl":  "https://github.com/Aron0525/auto-bill/releases/download/v2.4.1/autobill-v2.4.1.apk",
+    "sha256":  "87B23FAECC73D88D43B6E25FAFA3C010E8158ABE64BC7ADE4E1E352E91ED69ED",
+    "versionCode":  15,
+    "versionName":  "2.4.1",
+    "notes":  "两件事。一是记账后屏幕顶部会弹横幅，标题直接写金额（已记账 · 支出 ¥12.34），之前 MIUI 把这条通知当静默处理，只进通知栏不落横幅。二是新增「后台运行」入口，把重启后不记账的真实原因摆到明面上——系统拦住自启动，进程起不来，通知监听和无障碍就一起失效；按卡片里的顺序设一遍即可。"
 }
