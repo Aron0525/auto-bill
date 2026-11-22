@@ -21,6 +21,7 @@ public class SettingsActivity extends AppCompatActivity {
     private BillStore store;
     private MaterialSwitch swAuto, swNotify;
     private TextView tvA11y;
+    private TextView tvBackground;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -31,6 +32,7 @@ public class SettingsActivity extends AppCompatActivity {
         swAuto = findViewById(R.id.sw_auto);
         swNotify = findViewById(R.id.sw_notify);
         tvA11y = findViewById(R.id.tv_a11y);
+        tvBackground = findViewById(R.id.tv_background);
 
         swAuto.setChecked(Prefs.autoEnabled(this));
         swNotify.setChecked(Prefs.notifyEnabled(this));
@@ -51,6 +53,10 @@ public class SettingsActivity extends AppCompatActivity {
             @Override public void onClick(View v) {
                 startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
             }
+        });
+
+        findViewById(R.id.card_background).setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { showBackgroundOptions(); }
         });
 
         findViewById(R.id.btn_back).setOnClickListener(new View.OnClickListener() {
@@ -188,7 +194,109 @@ public class SettingsActivity extends AppCompatActivity {
         Toast.makeText(this, "无法打开通知使用权设置，请手动到 设置→应用→特殊权限", Toast.LENGTH_LONG).show();
     }
 
-    private void confirmClear() {        int n = store.count();
+    /**
+     * 后台运行。重启后不记账，九成栽在「自启动被系统拦」这一环：
+     * 进程根本起不来，通知监听和无障碍就都跟着失效，App 自己没有任何办法自愈。
+     */
+    private void showBackgroundOptions() {
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("让自动记账活过重启")
+                .setMessage("系统会在重启后拦截本应用自启动。进程起不来，通知监听和无障碍就一起失效，"
+                        + "账本自然一条都不动。下面按顺序设一遍。")
+                .setItems(new String[]{
+                        "① 自启动（最关键）",
+                        "② 省电策略 → 无限制",
+                        "③ 电池优化白名单",
+                        "④ 系统应用详情页"
+                }, (d, which) -> {
+                    switch (which) {
+                        case 0: openMiuiAutoStart(); break;
+                        case 1: openMiuiPower(); break;
+                        case 2: openBatteryWhitelist(); break;
+                        default: openAppDetail(); break;
+                    }
+                })
+                .setNegativeButton("知道了", null)
+                .show();
+    }
+
+    /** MIUI 自启动管理页。不同版本路径不一样，逐个试，全失败就退到应用详情 */
+    private void openMiuiAutoStart() {
+        String[][] targets = {
+                {"com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity"},
+                {"com.miui.securitycenter", "com.miui.powerkeeper.ui.HiddenAppsConfigActivity"},
+        };
+        for (String[] t : targets) {
+            try {
+                Intent i = new Intent();
+                i.setComponent(new android.content.ComponentName(t[0], t[1]));
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(i);
+                Toast.makeText(this, "请把「自动记账」的自启动打开", Toast.LENGTH_LONG).show();
+                return;
+            } catch (Throwable ignored) {}
+        }
+        Toast.makeText(this, "这台机器没有独立的自启动页，去应用详情里找", Toast.LENGTH_LONG).show();
+        openAppDetail();
+    }
+
+    /** MIUI 单应用省电策略页 */
+    private void openMiuiPower() {
+        try {
+            Intent i = new Intent();
+            i.setComponent(new android.content.ComponentName("com.miui.powerkeeper",
+                    "com.miui.powerkeeper.ui.HiddenAppsConfigActivity"));
+            i.putExtra("package_name", getPackageName());
+            i.putExtra("package_label", getString(R.string.app_name));
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+            Toast.makeText(this, "把省电策略改成「无限制」", Toast.LENGTH_LONG).show();
+            return;
+        } catch (Throwable ignored) {}
+        openAppDetail();
+    }
+
+    private void openBatteryWhitelist() {
+        try {
+            Intent i = new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+            Toast.makeText(this, "在列表里找到「自动记账」，选「不优化」", Toast.LENGTH_LONG).show();
+            return;
+        } catch (Throwable ignored) {}
+        openAppDetail();
+    }
+
+    private void openAppDetail() {
+        try {
+            Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+            i.setData(android.net.Uri.parse("package:" + getPackageName()));
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(i);
+        } catch (Throwable t) {
+            Toast.makeText(this, "打不开应用详情，请手动到 设置→应用", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** 回前台刷一次：分桶和电池白名单都可能被系统在后台改掉 */
+    private void refreshBackground() {
+        if (tvBackground == null) return;
+        boolean restricted = HealthCheck.standbyRestricted(this);
+        boolean battery = HealthCheck.batteryUnrestricted(this);
+        if (restricted) {
+            tvBackground.setText("后台运行：被系统限制 ✗  点此解除");
+            tvBackground.setTextColor(ContextCompat.getColor(this, R.color.expense));
+        } else if (!battery) {
+            tvBackground.setText("后台运行：未加入电池白名单 ⚠  点此设置");
+            tvBackground.setTextColor(ContextCompat.getColor(this, R.color.warn));
+        } else {
+            tvBackground.setText("后台运行：电池白名单已加 ✓  自启动仍需手动确认");
+            tvBackground.setTextColor(ContextCompat.getColor(this, R.color.ink_sub));
+        }
+    }
+
+    private void confirmClear() {
+        int n = store.count();
         if (n == 0) {
             Toast.makeText(this, "账本已经是空的", Toast.LENGTH_SHORT).show();
             return;
@@ -214,6 +322,7 @@ public class SettingsActivity extends AppCompatActivity {
         refreshPendingBadge();
         refreshNotifAccess();
         refreshAppsHint();
+        refreshBackground();
     }
 
     /** 应用读屏权限摘要：让用户一眼看到当前有多少 App 被限制 */

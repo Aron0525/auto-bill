@@ -337,6 +337,40 @@
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
+            <!-- 后台保活状态：重启后不记账，多半死在这一环 -->
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/card_background"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                app:cardBackgroundColor="@color/card"
+                app:cardCornerRadius="16dp"
+                app:cardElevation="0dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <TextView
+                        android:id="@+id/tv_background"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="后台运行：检查中"
+                        android:textColor="@color/ink_sub"
+                        android:textSize="16sp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="点按设置自启动与省电策略（重启后不记账，多半是这两项被系统拦了）"
+                        android:textColor="@color/ink_sub"
+                        android:textSize="11sp" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
             <!-- 数据管理 -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"

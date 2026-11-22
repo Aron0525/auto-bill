@@ -342,6 +342,10 @@ public class MainActivity extends AppCompatActivity {
         } else if (!listening) {
             notifLine.setText("通知监听已授权，服务未连接 ⚠  点此查看");
             notifLine.setTextColor(col(R.color.warn));
+        } else if (HealthCheck.standbyRestricted(this)) {
+            // 进程还活着但被系统判成受限，重启后基本必然掉线，提前说清楚
+            notifLine.setText("通知监听正常，但后台被系统限制 ⚠  点此解除");
+            notifLine.setTextColor(col(R.color.warn));
         } else {
             long lastAt = com.aron.autobill.core.NotifLog.lastAt();
             String tail = lastAt > 0 ? " 最近 " + hhmm(lastAt) : " 还没收到过通知";
